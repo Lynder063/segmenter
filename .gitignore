@@ -1,0 +1,49 @@
+# Build artifacts
+build/
+dist/
+*.spec
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+.netrc
+
+# Debug
+*.log
+debug.txt
+
+# Temporary files
+*.tmp
+*.bak
+
+# Profiler
+perf-traces/
+
+# Python & Virtualenv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+ENV/
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+
+# PyInstaller & Linux packaging
+linux/build/
+linux/dist/
+
+# Built packages
+*.deb
+*.rpm
+PKGBUILD
