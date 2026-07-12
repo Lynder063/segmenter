@@ -1,11 +1,13 @@
 # 🎬 Segmenter
 
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Linux-blue.svg)]()
-[![Python](https://img.shields.io/badge/Python-3.10+-yellow.svg)]()
-[![Qt](https://img.shields.io/badge/UI-PySide6%20(Qt6)-41cd52.svg)]()
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows-blue.svg)]()
+[![Python](https://img.shields.io/badge/Linux_Stack-Python_3.10+-yellow.svg)]()
+[![Qt](https://img.shields.io/badge/Linux_UI-PySide6%20(Qt6)-41cd52.svg)]()
+[![Dotnet](https://img.shields.io/badge/Windows_Stack-.NET_8.0-purple.svg)]()
+[![WPF](https://img.shields.io/badge/Windows_UI-WPF-blue.svg)]()
 
-**Segmenter** is a high-performance visual timestamp annotation tool for Linux. It lets you create, edit, and upload media segment markers — **Intro**, **Recap**, **Credits**, and **Preview** — to [TheIntroDB](https://theintrodb.org) and [IntroDB](https://introdb.app).
+**Segmenter** is a high-performance visual timestamp annotation tool for Linux and Windows. It lets you create, edit, and upload media segment markers — **Intro**, **Recap**, **Credits**, and **Preview** — to [TheIntroDB](https://theintrodb.org) and [IntroDB](https://introdb.app).
 
 ![Segmenter App Layout](docs/screenshot.png)
 
@@ -63,7 +65,7 @@ API keys are stored in `~/.config/Segmenter/keys.json` — no keyring daemon req
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Linux)
 
 ### Prerequisites
 
@@ -85,6 +87,27 @@ This script automatically creates a virtual environment, installs all Python dep
 
 ---
 
+## 🚀 Quick Start (Windows)
+
+### Prerequisites
+
+| Dependency | Purpose |
+|---|---|
+| `.NET 8.0 SDK` | Compilation and runtime |
+| `ffmpeg` | Audio extraction and thumbnail generation (must be in system PATH) |
+
+### Build & Run
+
+Run the PowerShell build script:
+
+```powershell
+.\windows\build.ps1
+```
+
+This will restore dependencies, compile the project, and generate a standalone executable at `windows\dist\Segmenter.exe`.
+
+---
+
 ## 📦 Packaging
 
 Build standalone `.deb`, `.rpm`, and Arch Linux packages:
@@ -101,6 +124,12 @@ Output artifacts are placed in `linux/dist/`.
 
 ```
 .
+├── windows/
+│   ├── build.ps1           # Windows Build Script
+│   ├── Segmenter/          # WPF C# Application
+│   │   ├── MainWindow.xaml # Main UI
+│   │   └── ...
+│   └── dist/               # Compiled Segmenter.exe
 ├── linux/
 │   ├── app.py              # Entry point
 │   ├── ui.py               # Main window & all UI logic
