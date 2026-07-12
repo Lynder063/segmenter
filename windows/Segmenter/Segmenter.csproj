@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+ 
+   <PropertyGroup>
+     <OutputType>Exe</OutputType>
+     <TargetFramework>net8.0-windows</TargetFramework>
+     <Nullable>enable</Nullable>
+     <ImplicitUsings>enable</ImplicitUsings>
+     <UseWPF>true</UseWPF>
+     <NoWarn>$(NoWarn);NU1701</NoWarn>
+   </PropertyGroup>
+ 
+   <ItemGroup>
+     <Resource Include="app_icon.png" />
+   </ItemGroup>
+ 
+   <ItemGroup>
+      <PackageReference Include="WPF-UI" Version="4.3.0" />
+      <PackageReference Include="DiscordRichPresence" Version="1.6.1.70" />
+      <PackageReference Include="LibVLCSharp.WPF" Version="3.9.0" />
+      <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.21" />
+   </ItemGroup>
+ 
+ </Project>

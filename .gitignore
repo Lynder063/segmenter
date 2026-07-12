@@ -47,3 +47,13 @@ linux/dist/
 *.deb
 *.rpm
 PKGBUILD
+
+# .NET & Windows
+[Bb]in/
+[Oo]bj/
+windows/dist/
+.dotnet/
+*.user
+*.suo
+test*.cs
+dotnet-install.ps1

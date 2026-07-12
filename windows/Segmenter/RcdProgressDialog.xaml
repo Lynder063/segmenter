@@ -1,0 +1,116 @@
+<ui:FluentWindow x:Class="Segmenter.RcdProgressDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        Title="Season Fingerprinting (RCD)" Height="540" Width="820"
+        WindowStartupLocation="CenterOwner"
+        Background="#121214"
+        ExtendsContentIntoTitleBar="True"
+        WindowBackdropType="None">
+    
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <!-- Title Bar Row -->
+            <RowDefinition Height="Auto"/>
+            <!-- Configuration Row -->
+            <RowDefinition Height="Auto"/>
+            <!-- Split Content Row (Files on left, logs on right) -->
+            <RowDefinition Height="*"/>
+            <!-- Progress Bar Row -->
+            <RowDefinition Height="Auto"/>
+            <!-- Action Buttons Row -->
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Custom TitleBar -->
+        <ui:TitleBar Title="Season Fingerprinting (RCD)" Grid.Row="0"/>
+
+        <!-- 1. HW Status & Configuration -->
+        <Grid Grid.Row="1" Margin="0,10,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="20"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="Hardware:" FontWeight="Bold" Foreground="#8e8e93" Margin="0,0,6,0"/>
+                <TextBlock x:Name="HwStatusText" Text="⚪ Loading GPU..." FontWeight="Bold" Foreground="#34d399"/>
+            </StackPanel>
+            
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="Mode:" FontWeight="Bold" Foreground="#8e8e93" Margin="0,0,6,0"/>
+                <ComboBox x:Name="DetectionModeCombo" SelectedIndex="0" Width="280" Background="#151518" Foreground="#e0e0e8" Padding="6">
+                    <ComboBoxItem Content="Color Histogram (Fast CPU) [Recommended]" Tag="CH"/>
+                    <ComboBoxItem Content="Color Texture Moments (Texture analysis)" Tag="CTM"/>
+                    <ComboBoxItem Content="CNN (AI Feature Extractor, GPU-accelerated)" Tag="CNN"/>
+                </ComboBox>
+            </StackPanel>
+
+            <ui:TextBlock Grid.Column="4" x:Name="StatusLabel" Text="Ready to scan directory" FontSize="11" Foreground="#38bdf8" VerticalAlignment="Center" TextAlignment="Right"/>
+        </Grid>
+
+        <!-- 2. SPLIT CONTENT AREA -->
+        <Grid Grid.Row="2" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <!-- Files List column -->
+                <ColumnDefinition Width="300" MinWidth="200" MaxWidth="400"/>
+                <!-- Splitter -->
+                <ColumnDefinition Width="6"/>
+                <!-- Log Console column -->
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Grid Splitter -->
+            <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" Background="#222226"/>
+
+            <!-- Files List Box -->
+            <GroupBox Grid.Column="0" Header="Video Files in Season" BorderBrush="#2a2a30" Padding="4">
+                <ListBox x:Name="FilesListBox" Background="Transparent" BorderThickness="0" ScrollViewer.VerticalScrollBarVisibility="Auto">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="2,4,2,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="20"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <!-- Status Icon -->
+                                <TextBlock Grid.Column="0" Text="{Binding Icon}" Foreground="{Binding StatusColor}" FontWeight="Bold" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                                <!-- Name -->
+                                <TextBlock Grid.Column="1" Text="{Binding Name}" FontWeight="Medium" Foreground="White" VerticalAlignment="Center" Margin="6,0,6,0" TextTrimming="CharacterEllipsis"/>
+                                <!-- Status/Detections text -->
+                                <TextBlock Grid.Column="2" Text="{Binding DetectionsText}" FontSize="10" Foreground="#8e8e93" VerticalAlignment="Center" TextAlignment="Right"/>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </GroupBox>
+
+            <!-- Console Log Box -->
+            <GroupBox Grid.Column="2" Header="Detailed Console Output" BorderBrush="#2a2a30" Padding="0">
+                <TextBox x:Name="LogArea" IsReadOnly="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                         Background="#0c0c0f" Foreground="#a0a0b0" FontFamily="Consolas" FontSize="10" BorderThickness="0"/>
+            </GroupBox>
+        </Grid>
+
+        <!-- 3. Progress Bar -->
+        <Grid Grid.Row="3" Margin="0,0,0,14">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="6"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <ProgressBar Grid.Row="0" x:Name="ProgressBar" Height="10" Minimum="0" Maximum="100"/>
+            <ui:TextBlock Grid.Row="2" x:Name="ProgressDetailsLabel" Text="0 of 0 files processed" FontSize="11" Foreground="#a0a0b0"/>
+        </Grid>
+
+        <!-- 4. Action Buttons -->
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+            <ui:Button x:Name="StartBtn" Content="Start Scan" Click="OnStartScanClicked" Background="#0284c7" Foreground="White" FontWeight="Bold" Margin="0,0,10,0"/>
+            <ui:Button x:Name="CloseBtn" Content="Cancel" Click="OnCloseClicked"/>
+        </StackPanel>
+        
+    </Grid>
+</ui:FluentWindow>

@@ -1,0 +1,24 @@
+<UserControl x:Class="Segmenter.Controls.FrameStripControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Height="95">
+    <Grid Background="#121214">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        
+        <!-- Header Mode Indicator -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="6,2,6,2">
+            <Border x:Name="ModeBadge" CornerRadius="4" Padding="6,2,6,2" Background="#1e293b">
+                <TextBlock x:Name="ModeBadgeText" Text="Overview" FontSize="10" FontWeight="Bold" Foreground="#38bdf8"/>
+            </Border>
+            <TextBlock x:Name="ModeDetailText" Text="step = 250ms, fps 23.98" FontSize="11" Foreground="#8e8e93" VerticalAlignment="Center" Margin="8,0,0,0"/>
+        </StackPanel>
+        
+        <!-- Pás náhledů (13 sloupců) -->
+        <UniformGrid Grid.Row="1" Rows="1" Columns="13" Margin="0,2,0,2" x:Name="ThumbnailsGrid">
+            <!-- Dynamic cells added in code-behind -->
+        </UniformGrid>
+    </Grid>
+</UserControl>

@@ -1,0 +1,356 @@
+<ui:FluentWindow x:Class="Segmenter.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        xmlns:controls="clr-namespace:Segmenter.Controls"
+        xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
+        mc:Ignorable="d"
+        Title="Segmenter" Height="760" Width="1200"
+        WindowStartupLocation="CenterScreen"
+        Background="#121214"
+        ExtendsContentIntoTitleBar="True"
+        WindowBackdropType="None"
+        AllowDrop="True" Drop="Window_Drop" DragOver="Window_DragOver">
+    
+    <Window.TaskbarItemInfo>
+        <TaskbarItemInfo x:Name="TaskbarProgress"/>
+    </Window.TaskbarItemInfo>
+    
+    <Grid>
+        <Grid.RowDefinitions>
+            <!-- Title Bar Row -->
+            <RowDefinition Height="Auto"/>
+            <!-- Main Grid Row -->
+            <RowDefinition Height="*"/>
+            <!-- Status Bar Row -->
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Custom TitleBar -->
+        <ui:TitleBar Title="Segmenter" Grid.Row="0" Icon="app_icon.png">
+            <ui:TitleBar.TrailingContent>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,100,0">
+                    <ui:Button x:Name="UndoBtn" Icon="{ui:SymbolIcon ArrowUndo24}" Click="OnUndoClicked" ToolTip="Undo (Ctrl+Z)"/>
+                    <ui:Button x:Name="RedoBtn" Icon="{ui:SymbolIcon ArrowRedo24}" Click="OnRedoClicked" ToolTip="Redo (Ctrl+Y)"/>
+                </StackPanel>
+            </ui:TitleBar.TrailingContent>
+        </ui:TitleBar>
+
+        <!-- Main Layout Splitter Grid -->
+        <Grid Grid.Row="1" Margin="8">
+            <Grid.ColumnDefinitions>
+                <!-- Left Sidebar (TMDb / Settings) -->
+                <ColumnDefinition Width="280" MinWidth="250" MaxWidth="350"/>
+                <ColumnDefinition Width="4"/>
+                <!-- Center Main Area (Video, Timeline, Frame Strip) -->
+                <ColumnDefinition Width="*" MinWidth="400"/>
+                <ColumnDefinition Width="4"/>
+                <!-- Right Sidebar (Segment Inputs) -->
+                <ColumnDefinition Width="320" MinWidth="280" MaxWidth="380"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Grid Splitters -->
+            <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" Background="#222226"/>
+            <GridSplitter Grid.Column="3" HorizontalAlignment="Stretch" Background="#222226"/>
+
+            <!-- 1. LEFT SIDEBAR -->
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
+                <controls:SpacingStackPanel Margin="0,0,8,0" Spacing="10">
+                    
+                    <!-- Media File Loader -->
+                    <GroupBox Header="Media File" BorderBrush="#2a2a30" Padding="8">
+                        <controls:SpacingStackPanel Spacing="6">
+                            <ui:Button Content="Open Video File..." Icon="{ui:SymbolIcon FolderOpen24}" Click="OnOpenVideoClicked" HorizontalAlignment="Stretch"/>
+                            <ui:TextBlock x:Name="VideoPathText" Text="No file loaded" TextTrimming="CharacterEllipsis" FontSize="11" Foreground="#a0a0b0" Margin="2,4,2,4"/>
+                            
+                            <ui:Button Content="Scan Season Directory (RCD)" Icon="{ui:SymbolIcon CalendarSearch20}" Click="OnScanDirectoryClicked" HorizontalAlignment="Stretch"/>
+                        </controls:SpacingStackPanel>
+                    </GroupBox>
+
+                    <!-- TMDb Lookup -->
+                    <GroupBox Header="TMDb / Metadata Lookup" BorderBrush="#2a2a30" Padding="8">
+                        <controls:SpacingStackPanel Spacing="8">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBox x:Name="SearchTitleInput" PlaceholderText="Search Movie/Show Title..." Icon="{ui:SymbolIcon Search24}" KeyDown="OnSearchTitleKeyDown"/>
+                                <ui:Button Grid.Column="1" Icon="{ui:SymbolIcon Search24}" Click="OnSearchTitleClicked" Margin="4,0,0,0"/>
+                            </Grid>
+                            
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="4"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="4"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBox Grid.Column="0" x:Name="LookupYearInput" PlaceholderText="Year" PreviewTextInput="OnNumberValidation"/>
+                                <ui:TextBox Grid.Column="2" x:Name="LookupSeasonInput" PlaceholderText="Season" PreviewTextInput="OnNumberValidation"/>
+                                <ui:TextBox Grid.Column="4" x:Name="LookupEpisodeInput" PlaceholderText="Episode" PreviewTextInput="OnNumberValidation"/>
+                            </Grid>
+
+                            <ui:Button Content="Auto Lookup from Name" Icon="{ui:SymbolIcon AutoFitHeight24}" Click="OnAutoLookupClicked" HorizontalAlignment="Stretch"/>
+                            
+                            <ui:TextBlock Text="Matching Results:" FontWeight="Bold" Margin="0,4,0,0" Foreground="#8e8e93"/>
+                            <ComboBox x:Name="LookupResultsCombo" SelectionChanged="OnLookupResultSelected" Background="#26262b" Foreground="White" Padding="6"/>
+
+                            <Image x:Name="PosterImage" Height="150" Stretch="Uniform" Margin="0,4,0,4"/>
+
+                            <ui:TextBlock x:Name="MetadataInfoText" Text="No metadata resolved" TextWrapping="Wrap" FontSize="11" Foreground="#a0a0b0"/>
+                        </controls:SpacingStackPanel>
+                    </GroupBox>
+
+                    <!-- API Configurations -->
+                    <GroupBox Header="API Keys" BorderBrush="#2a2a30" Padding="8">
+                        <controls:SpacingStackPanel Spacing="6">
+                            <ui:TextBlock Text="TheIntroDB Token" FontSize="11" Foreground="#8e8e93"/>
+                            <ui:PasswordBox x:Name="TheIntroDbTokenInput" PasswordChanged="OnApiKeysChanged"/>
+                            
+                            <ui:TextBlock Text="IntroDB API Key" FontSize="11" Foreground="#8e8e93"/>
+                            <ui:PasswordBox x:Name="IntroDbApiKeyInput" PasswordChanged="OnApiKeysChanged"/>
+
+                            <ui:TextBlock Text="TMDb Access Token (Bearer)" FontSize="11" Foreground="#8e8e93"/>
+                            <ui:PasswordBox x:Name="TmdbTokenInput" PasswordChanged="OnApiKeysChanged"/>
+                        </controls:SpacingStackPanel>
+                    </GroupBox>
+
+                </controls:SpacingStackPanel>
+            </ScrollViewer>
+
+            <!-- 2. CENTER CONTENT (Video Player, Timeline, Frame Strip) -->
+            <Grid Grid.Column="2" Margin="8,0,8,0">
+                <Grid.RowDefinitions>
+                    <!-- Video Player -->
+                    <RowDefinition Height="3*" MinHeight="250"/>
+                    <RowDefinition Height="Auto"/>
+                    <!-- Frame Strip -->
+                    <RowDefinition Height="Auto"/>
+                    <!-- Waveform/Timeline -->
+                    <RowDefinition Height="2*" MinHeight="180"/>
+                </Grid.RowDefinitions>
+
+                <!-- Video Viewport -->
+                <Border Grid.Row="0" CornerRadius="8" Background="Black" ClipToBounds="True" BorderBrush="#2a2a30" BorderThickness="1">
+                    <Grid>
+                        <!-- VLC Native VideoView -->
+                        <vlc:VideoView x:Name="VideoView" />
+                    </Grid>
+                </Border>
+
+                <!-- Video Controls Bar -->
+                <Grid Grid.Row="1" Margin="0,6,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    
+                    <ui:Button Grid.Column="0" x:Name="PlayPauseBtn" Icon="{ui:SymbolIcon Play24}" Click="OnPlayPauseClicked" ToolTip="Play / Pause (Space)"/>
+                    <ui:Button Grid.Column="1" Icon="{ui:SymbolIcon ArrowLeft24}" Click="OnStepBackwardClicked" ToolTip="Step 1 frame backward (Left Arrow)" Margin="4,0,0,0"/>
+                    <ui:Button Grid.Column="2" Icon="{ui:SymbolIcon ArrowRight24}" Click="OnStepForwardClicked" ToolTip="Step 1 frame forward (Right Arrow)" Margin="4,0,0,0"/>
+                    
+                    <ui:TextBlock Grid.Column="3" x:Name="TimeLabel" Text="00:00.000" VerticalAlignment="Center" Margin="10,0,10,0" FontFamily="Consolas"/>
+                    
+                    <Slider Grid.Column="4" x:Name="PositionSlider" Minimum="0" ValueChanged="OnSliderValueChanged" 
+                            PreviewMouseLeftButtonDown="OnSliderMouseDown" PreviewMouseLeftButtonUp="OnSliderMouseUp" 
+                            VerticalAlignment="Center"/>
+                    
+                    <ui:TextBlock Grid.Column="5" x:Name="DurationLabel" Text="00:00.000" VerticalAlignment="Center" Margin="10,0,0,0" FontFamily="Consolas"/>
+                    
+                    <ui:Button Grid.Column="6" x:Name="VolumeBtn" Icon="{ui:SymbolIcon Speaker224}" Click="OnVolumeMuteToggle" ToolTip="Mute" Margin="10,0,0,0"/>
+                    <Slider Grid.Column="7" x:Name="VolumeSlider" Width="80" Minimum="0" Maximum="100" Value="50" ValueChanged="OnVolumeSliderValueChanged" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                </Grid>
+
+                <!-- Timeline / Waveform -->
+                <GroupBox Grid.Row="3" Header="Interactive Timeline" BorderBrush="#2a2a30" Margin="0,4,0,4">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" x:Name="TimelineScroll">
+                            <controls:TimelineControl x:Name="Timeline" 
+                                                     SeekRequested="OnTimelineSeek"
+                                                     DraftRangeCreated="OnTimelineDraftCreated"
+                                                     DraftStartDragged="OnTimelineDraftStartDragged"
+                                                     DraftEndDragged="OnTimelineDraftEndDragged"
+                                                     DraftMoved="OnTimelineDraftMoved"
+                                                     DragBegan="OnTimelineDragBegan"
+                                                     DragEnded="OnTimelineDragEnded"/>
+                        </ScrollViewer>
+                        
+                        <!-- Zoom Control -->
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,4,0,0">
+                            <ui:TextBlock Text="Zoom:" VerticalAlignment="Center" Margin="0,0,6,0" FontSize="11" Foreground="#a0a0b0"/>
+                            <Slider x:Name="ZoomSlider" Width="100" Minimum="1" Maximum="30" Value="1" ValueChanged="OnZoomChanged"/>
+                        </StackPanel>
+                    </Grid>
+                </GroupBox>
+
+                <!-- Frame Strip -->
+                <GroupBox Grid.Row="2" Header="Frame Strip Preview" BorderBrush="#2a2a30" Margin="0,4,0,0">
+                    <controls:FrameStripControl x:Name="FrameStrip" SeekRequested="OnFrameStripSeek"/>
+                </GroupBox>
+
+            </Grid>
+
+            <!-- 3. RIGHT SIDEBAR (Manual Segment Editor & Upload) -->
+            <ScrollViewer Grid.Column="4" VerticalScrollBarVisibility="Auto">
+                <controls:SpacingStackPanel Margin="8,0,0,0" Spacing="10">
+                    
+                    <!-- Segment Editor Rows -->
+                    <GroupBox Header="Segment conceptual drafts" BorderBrush="#2a2a30" Padding="8">
+                        <controls:SpacingStackPanel Spacing="10">
+                            
+                            <!-- Intro Row -->
+                            <Border BorderBrush="#2c2c35" BorderThickness="1" CornerRadius="6" Background="#1c1c1f" Padding="8">
+                                <controls:SpacingStackPanel Spacing="6">
+                                    <controls:SpacingStackPanel Orientation="Horizontal" Spacing="6">
+                                        <Ellipse Width="10" Height="10" Fill="{StaticResource SegmentIntroBrush}"/>
+                                        <ui:TextBlock Text="Intro" FontWeight="Bold"/>
+                                    </controls:SpacingStackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ui:TextBox Grid.Column="0" x:Name="IntroStartInput" PlaceholderText="Start" LostFocus="OnIntroInputLostFocus"/>
+                                        <ui:Button Grid.Column="1" Icon="{ui:SymbolIcon Pin24}" Click="OnSetIntroStartClicked" ToolTip="Set start from playhead" Margin="4,0,0,0"/>
+                                        
+                                        <ui:TextBox Grid.Column="2" x:Name="IntroEndInput" PlaceholderText="End" LostFocus="OnIntroInputLostFocus" Margin="8,0,0,0"/>
+                                        <ui:Button Grid.Column="3" Icon="{ui:SymbolIcon Pin24}" Click="OnSetIntroEndClicked" ToolTip="Set end from playhead" Margin="4,0,0,0"/>
+                                    </Grid>
+                                    <controls:SpacingStackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="4">
+                                        <ui:Button Icon="{ui:SymbolIcon Delete24}" Click="OnClearIntroClicked" ToolTip="Clear draft"/>
+                                        <ui:Button Content="Upload" Icon="{ui:SymbolIcon ArrowUpload24}" Click="OnUploadIntroClicked" Foreground="#007aff"/>
+                                    </controls:SpacingStackPanel>
+                                </controls:SpacingStackPanel>
+                            </Border>
+
+                            <!-- Recap Row -->
+                            <Border BorderBrush="#2c2c35" BorderThickness="1" CornerRadius="6" Background="#1c1c1f" Padding="8">
+                                <controls:SpacingStackPanel Spacing="6">
+                                    <controls:SpacingStackPanel Orientation="Horizontal" Spacing="6">
+                                        <Ellipse Width="10" Height="10" Fill="{StaticResource SegmentRecapBrush}"/>
+                                        <ui:TextBlock Text="Recap" FontWeight="Bold"/>
+                                    </controls:SpacingStackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ui:TextBox Grid.Column="0" x:Name="RecapStartInput" PlaceholderText="Start" LostFocus="OnRecapInputLostFocus"/>
+                                        <ui:Button Grid.Column="1" Icon="{ui:SymbolIcon Pin24}" Click="OnSetRecapStartClicked" ToolTip="Set start from playhead" Margin="4,0,0,0"/>
+                                        
+                                        <ui:TextBox Grid.Column="2" x:Name="RecapEndInput" PlaceholderText="End" LostFocus="OnRecapInputLostFocus" Margin="8,0,0,0"/>
+                                        <ui:Button Grid.Column="3" Icon="{ui:SymbolIcon Pin24}" Click="OnSetRecapEndClicked" ToolTip="Set end from playhead" Margin="4,0,0,0"/>
+                                    </Grid>
+                                    <controls:SpacingStackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="4">
+                                        <ui:Button Icon="{ui:SymbolIcon Delete24}" Click="OnClearRecapClicked" ToolTip="Clear draft"/>
+                                        <ui:Button Content="Upload" Icon="{ui:SymbolIcon ArrowUpload24}" Click="OnUploadRecapClicked" Foreground="#ff9500"/>
+                                    </controls:SpacingStackPanel>
+                                </controls:SpacingStackPanel>
+                            </Border>
+
+                            <!-- Credits Row -->
+                            <Border BorderBrush="#2c2c35" BorderThickness="1" CornerRadius="6" Background="#1c1c1f" Padding="8">
+                                <controls:SpacingStackPanel Spacing="6">
+                                    <controls:SpacingStackPanel Orientation="Horizontal" Spacing="6">
+                                        <Ellipse Width="10" Height="10" Fill="{StaticResource SegmentCreditsBrush}"/>
+                                        <ui:TextBlock Text="Credits" FontWeight="Bold"/>
+                                    </controls:SpacingStackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ui:TextBox Grid.Column="0" x:Name="CreditsStartInput" PlaceholderText="Start" LostFocus="OnCreditsInputLostFocus"/>
+                                        <ui:Button Grid.Column="1" Icon="{ui:SymbolIcon Pin24}" Click="OnSetCreditsStartClicked" ToolTip="Set start from playhead" Margin="4,0,0,0"/>
+                                        
+                                        <ui:TextBox Grid.Column="2" x:Name="CreditsEndInput" PlaceholderText="End" LostFocus="OnCreditsInputLostFocus" Margin="8,0,0,0"/>
+                                        <ui:Button Grid.Column="3" Icon="{ui:SymbolIcon Pin24}" Click="OnSetCreditsEndClicked" ToolTip="Set end from playhead" Margin="4,0,0,0"/>
+                                    </Grid>
+                                    <controls:SpacingStackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="4">
+                                        <ui:Button Icon="{ui:SymbolIcon Delete24}" Click="OnClearCreditsClicked" ToolTip="Clear draft"/>
+                                        <ui:Button Content="Upload" Icon="{ui:SymbolIcon ArrowUpload24}" Click="OnUploadCreditsClicked" Foreground="#34c759"/>
+                                    </controls:SpacingStackPanel>
+                                </controls:SpacingStackPanel>
+                            </Border>
+
+                            <!-- Preview Row -->
+                            <Border BorderBrush="#2c2c35" BorderThickness="1" CornerRadius="6" Background="#1c1c1f" Padding="8">
+                                <controls:SpacingStackPanel Spacing="6">
+                                    <controls:SpacingStackPanel Orientation="Horizontal" Spacing="6">
+                                        <Ellipse Width="10" Height="10" Fill="{StaticResource SegmentPreviewBrush}"/>
+                                        <ui:TextBlock Text="Preview" FontWeight="Bold"/>
+                                    </controls:SpacingStackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <ui:TextBox Grid.Column="0" x:Name="PreviewStartInput" PlaceholderText="Start" LostFocus="OnPreviewInputLostFocus"/>
+                                        <ui:Button Grid.Column="1" Icon="{ui:SymbolIcon Pin24}" Click="OnSetPreviewStartClicked" ToolTip="Set start from playhead" Margin="4,0,0,0"/>
+                                        
+                                        <ui:TextBox Grid.Column="2" x:Name="PreviewEndInput" PlaceholderText="End" LostFocus="OnPreviewInputLostFocus" Margin="8,0,0,0"/>
+                                        <ui:Button Grid.Column="3" Icon="{ui:SymbolIcon Pin24}" Click="OnSetPreviewEndClicked" ToolTip="Set end from playhead" Margin="4,0,0,0"/>
+                                    </Grid>
+                                    <controls:SpacingStackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="4">
+                                        <ui:Button Icon="{ui:SymbolIcon Delete24}" Click="OnClearPreviewClicked" ToolTip="Clear draft"/>
+                                        <ui:Button Content="Upload" Icon="{ui:SymbolIcon ArrowUpload24}" Click="OnUploadPreviewClicked" Foreground="#ff2d55"/>
+                                    </controls:SpacingStackPanel>
+                                </controls:SpacingStackPanel>
+                            </Border>
+
+                            <!-- Upload All Button -->
+                            <ui:Button x:Name="UploadAllBtn" Content="Upload All Drafts" Icon="{ui:SymbolIcon ArrowUpload24}" Click="OnUploadAllClicked" 
+                                       Background="#007aff" Foreground="White" FontWeight="Bold" Margin="0,10,0,0" Padding="12" HorizontalAlignment="Stretch"/>
+
+                        </controls:SpacingStackPanel>
+                    </GroupBox>
+                    
+                </controls:SpacingStackPanel>
+            </ScrollViewer>
+
+        </Grid>
+
+        <!-- 3. STATUS BAR -->
+        <Border Grid.Row="2" Background="#1c1c1f" BorderBrush="#2a2a30" BorderThickness="0,1,0,0" Padding="10,6,10,6">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                
+                <controls:SpacingStackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10">
+                    <ui:TextBlock x:Name="StatusMessageText" Text="Ready" FontSize="12" Foreground="#38bdf8"/>
+                    <ui:TextBlock Text="|" Foreground="#2a2a30"/>
+                    <ui:TextBlock x:Name="ApiLimitsText" Text="No limit headers" FontSize="11" Foreground="#a0a0b0" VerticalAlignment="Center"/>
+                    <ProgressBar x:Name="AsyncProgressBar" Width="100" Height="8" Minimum="0" Maximum="100" Visibility="Collapsed" VerticalAlignment="Center"/>
+                </controls:SpacingStackPanel>
+                
+                <ui:TextBlock Grid.Column="1" x:Name="GpuStatusText" Text="⚪ No compatible GPU detected" FontSize="11" Foreground="#a0a0b0" VerticalAlignment="Center"/>
+            </Grid>
+        </Border>
+
+    </Grid>
+</ui:FluentWindow>
