@@ -20,7 +20,7 @@ namespace Segmenter.Services
         // Replace this with your own Discord Application ID.
         // Create an app at https://discord.com/developers/applications
         // ---------------------------------------------------------------
-        private const string DISCORD_APP_ID = "1525605882728288367";
+        private const string DISCORD_APP_ID = "YOUR_DISCORD_APP_ID_HERE";
 
         private static DiscordRpcClient? _client;
         private static bool _initialized = false;
