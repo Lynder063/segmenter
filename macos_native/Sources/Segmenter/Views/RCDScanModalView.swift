@@ -107,6 +107,7 @@ public struct RCDScanModalView: View {
                                 selectDirectory()
                             }
                             .buttonStyle(.borderedProminent)
+                            .disabled(isScanning)
                         }
                         .padding(10)
                         .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.windowBackgroundColor)))
@@ -163,10 +164,13 @@ public struct RCDScanModalView: View {
                                 )
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    selectedMethod = method
+                                    if !isScanning {
+                                        selectedMethod = method
+                                    }
                                 }
                             }
                         }
+                        .disabled(isScanning)
                     }
 
                     // 3. Parameters
@@ -178,17 +182,20 @@ public struct RCDScanModalView: View {
                                 Text("Min Segment Length: \(Int(minSegmentLengthSec))s")
                                     .font(.caption)
                                 Slider(value: $minSegmentLengthSec, in: 15...120, step: 5)
+                                    .disabled(isScanning)
                             }
 
                             VStack(alignment: .leading) {
                                 Text("Similarity Threshold: \(Int(similarityThreshold))%")
                                     .font(.caption)
                                 Slider(value: $similarityThreshold, in: 60...95, step: 5)
+                                    .disabled(isScanning)
                             }
                         }
                         .padding(10)
                         .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.windowBackgroundColor)))
                     }
+
 
                     // Progress Section
                     if isScanning || progressPct > 0 {
@@ -322,7 +329,8 @@ public struct RCDScanModalView: View {
                         startScan()
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(directoryURL == nil || isScanning)
+                    .disabled(isScanning)
+
                 }
             }
             .padding()
@@ -349,7 +357,11 @@ public struct RCDScanModalView: View {
     }
 
     private func startScan() {
+        if directoryURL == nil {
+            selectDirectory()
+        }
         guard let dirURL = directoryURL else { return }
+
         isScanning = true
         progressPct = 0
         statusText = "Initializing \(selectedMethod.rawValue)..."
