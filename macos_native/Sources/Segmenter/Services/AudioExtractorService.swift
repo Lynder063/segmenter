@@ -21,42 +21,48 @@ public final class AudioExtractorService {
         return try await Task.detached(priority: .userInitiated) {
             var samples: [Int16] = []
 
-            // Try AVAssetReader first
-            let asset = AVAsset(url: videoURL)
-            if let audioTrack = try? await asset.loadTracks(withMediaType: .audio).first,
-               let reader = try? AVAssetReader(asset: asset) {
+            let ext = videoURL.pathExtension.lowercased()
+            let isNonNativeContainer = ["mkv", "avi", "webm", "flv", "wmv", "vob"].contains(ext)
 
-                let outputSettings: [String: Any] = [
-                    AVFormatIDKey: kAudioFormatLinearPCM,
-                    AVLinearPCMBitDepthKey: 16,
-                    AVLinearPCMIsBigEndianKey: false,
-                    AVLinearPCMIsFloatKey: false,
-                    AVLinearPCMIsNonInterleaved: false,
-                    AVNumberOfChannelsKey: 1,
-                    AVSampleRateKey: 8000
-                ]
+            // Try AVAssetReader only for native containers (MP4, MOV, M4V)
+            if !isNonNativeContainer {
+                let asset = AVAsset(url: videoURL)
+                if let audioTrack = try? await asset.loadTracks(withMediaType: .audio).first,
+                   let reader = try? AVAssetReader(asset: asset) {
 
-                let trackOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
-                reader.add(trackOutput)
-                reader.startReading()
+                    let outputSettings: [String: Any] = [
+                        AVFormatIDKey: kAudioFormatLinearPCM,
+                        AVLinearPCMBitDepthKey: 16,
+                        AVLinearPCMIsBigEndianKey: false,
+                        AVLinearPCMIsFloatKey: false,
+                        AVLinearPCMIsNonInterleaved: false,
+                        AVNumberOfChannelsKey: 1,
+                        AVSampleRateKey: 1000
+                    ]
 
-                while let sampleBuffer = trackOutput.copyNextSampleBuffer() {
-                    if let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) {
-                        let length = CMBlockBufferGetDataLength(blockBuffer)
-                        var bufferSamples = [Int16](repeating: 0, count: length / 2)
-                        CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: &bufferSamples)
-                        samples.append(contentsOf: bufferSamples)
+                    let trackOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
+                    reader.add(trackOutput)
+                    reader.startReading()
+
+                    while let sampleBuffer = trackOutput.copyNextSampleBuffer() {
+                        if let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) {
+                            let length = CMBlockBufferGetDataLength(blockBuffer)
+                            var bufferSamples = [Int16](repeating: 0, count: length / 2)
+                            CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: &bufferSamples)
+                            samples.append(contentsOf: bufferSamples)
+                        }
                     }
                 }
             }
 
-            // Fallback to bundled FFmpeg for MKV / AC3 / DTS / x265 audio streams
+            // Fallback / Primary for MKV / AC3 / DTS / x265 audio streams via FFmpeg
             if samples.isEmpty {
-                LoggerService.shared.info("[AudioExtractor] AVAssetReader returned empty audio for \(videoURL.lastPathComponent). Falling back to FFmpeg PCM extraction...")
+                LoggerService.shared.info("[AudioExtractor] Using FFmpeg PCM audio extraction for \(videoURL.lastPathComponent)...")
                 if let pcm = try? await FFmpegService.shared.extractPCMAudio(url: videoURL) {
                     samples = pcm
                 }
             }
+
 
             progressHandler(50)
             guard !samples.isEmpty else {

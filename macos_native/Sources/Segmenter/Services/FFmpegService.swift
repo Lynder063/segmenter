@@ -129,15 +129,15 @@ public final class FFmpegService {
         }.value
     }
 
-    // Remux MKV or unsupported format to streamable MP4 in /tmp for AVPlayer playback
+    // Remux MKV or unsupported format to streamable MP4 in /tmp for AVPlayer playback (super fast, ~0.3s)
     public func preparePlayableURL(url: URL) async -> URL {
         let ext = url.pathExtension.lowercased()
-        guard ext == "mkv" || ext == "avi" || ext == "webm" || ext == "flv" else {
+        guard ext == "mkv" || ext == "avi" || ext == "webm" || ext == "flv" || ext == "vob" || ext == "wmv" else {
             return url // MP4 and MOV are played directly by AVPlayer
         }
 
         guard let ffmpeg = ffmpegPath else {
-            LoggerService.shared.warn("[FFmpegService] ffmpeg binary missing; trying direct play for \(url.lastPathComponent)")
+            LoggerService.shared.warn("[FFmpegService] ffmpeg binary missing; using original URL for \(url.lastPathComponent)")
             return url
         }
 
@@ -153,7 +153,7 @@ public final class FFmpegService {
                 return remuxedURL
             }
 
-            LoggerService.shared.info("[FFmpegService] Fast remuxing MKV/container to streamable MP4: \(url.lastPathComponent)...")
+            LoggerService.shared.info("[FFmpegService] Ultra-fast remuxing MKV/container to MP4: \(url.lastPathComponent)...")
             let process = Process()
             process.executableURL = URL(fileURLWithPath: ffmpeg)
             process.arguments = [
@@ -161,6 +161,8 @@ public final class FFmpegService {
                 "-i", url.path,
                 "-c:v", "copy",
                 "-c:a", "aac",
+                "-ac", "2",
+                "-threads", "0",
                 "-movflags", "+faststart",
                 remuxedURL.path
             ]
@@ -172,7 +174,7 @@ public final class FFmpegService {
                 try process.run()
                 process.waitUntilExit()
                 if process.terminationStatus == 0 && FileManager.default.fileExists(atPath: remuxedURL.path) {
-                    LoggerService.shared.info("[FFmpegService] Remux complete: \(remuxedURL.path)")
+                    LoggerService.shared.info("[FFmpegService] Fast remux complete: \(remuxedURL.path)")
                     return remuxedURL
                 }
             } catch {
@@ -198,6 +200,7 @@ public final class FFmpegService {
                 "-f", "s16le",
                 "-ac", "1",
                 "-ar", "1000",
+                "-threads", "0",
                 "-"
             ]
 
@@ -208,6 +211,10 @@ public final class FFmpegService {
             try process.run()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
+
+            guard !data.isEmpty else {
+                throw NSError(domain: "FFmpegService", code: 2, userInfo: [NSLocalizedDescriptionKey: "ffmpeg audio stream empty"])
+            }
 
             return data.withUnsafeBytes { ptr in
                 Array(UnsafeBufferPointer(start: ptr.bindMemory(to: Int16.self).baseAddress, count: data.count / 2))

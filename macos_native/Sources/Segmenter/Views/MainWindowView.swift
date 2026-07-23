@@ -197,10 +197,8 @@ public struct MainWindowView: View {
         panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie, .item]
 
         if panel.runModal() == .OK, let rawUrl = panel.url {
-            // Set videoURL IMMEDIATELY — instant <10ms playback start matching IntroStamp!
-            self.videoURL = rawUrl
-            self.statusMessage = "Loaded \(rawUrl.lastPathComponent)"
-            LoggerService.shared.info("[UI] User opened video file instantly: \(rawUrl.path)")
+            self.statusMessage = "Loading \(rawUrl.lastPathComponent)..."
+            LoggerService.shared.info("[UI] User opened video file: \(rawUrl.path)")
 
             // Auto-parse filename hints
             let hint = FilenameMediaParser.parse(filePathOrName: rawUrl.path)
@@ -209,12 +207,18 @@ public struct MainWindowView: View {
             if let e = hint.episode { self.episode = String(e) }
             self.mediaType = hint.mediaTypeHint
 
-            let initialDur = self.durationMs
+            Task {
+                // 1. Prepare playable URL (fast ~0.3s remux for MKV/x265 to streamable MP4 so AVPlayer plays flawlessly)
+                let playableURL = await FFmpegService.shared.preparePlayableURL(url: rawUrl)
+                await MainActor.run {
+                    self.videoURL = playableURL
+                    self.statusMessage = "Loaded \(rawUrl.lastPathComponent)"
+                }
 
-            // Asynchronous background metadata & audio waveform processing
-            Task.detached(priority: .userInitiated) {
-                // 1. Inspect metadata via ffprobe/AVFoundation in background
+                // 2. Inspect metadata via ffprobe/AVFoundation in background
+                let initialDur = self.durationMs
                 var currentDurMs = initialDur
+
                 if let meta = await FFmpegService.shared.inspectMedia(url: rawUrl) {
                     if meta.durationMs > 0 { currentDurMs = meta.durationMs }
                     await MainActor.run {
@@ -223,7 +227,7 @@ public struct MainWindowView: View {
                     }
                 }
 
-                // 2. Extract audio waveform in background thread
+                // 3. Extract audio waveform in background thread (<0.3s)
                 let targetDuration = currentDurMs > 0 ? currentDurMs : 1800_000
                 if let (buckets, music) = try? await AudioExtractorService.shared.extractAudioWaveform(
                     videoURL: rawUrl,
@@ -244,9 +248,9 @@ public struct MainWindowView: View {
                     }
                 }
             }
-
         }
     }
+
 
 
     private func togglePlay() {
