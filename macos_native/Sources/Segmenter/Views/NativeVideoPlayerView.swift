@@ -99,30 +99,36 @@ public struct NativeVideoPlayerView: NSViewRepresentable {
                 return
             }
 
-            LoggerService.shared.info("[VideoPlayer] Loading native video: \(videoURL.lastPathComponent)")
-            let asset = AVAsset(url: videoURL)
+            LoggerService.shared.info("[VideoPlayer] Loading native video instantly: \(videoURL.lastPathComponent)")
+            let assetOptions: [String: Any] = [
+                AVURLAssetPreferPreciseDurationAndTimingKey: true
+            ]
+            let asset = AVURLAsset(url: videoURL, options: assetOptions)
             let item = AVPlayerItem(asset: asset)
 
             player.replaceCurrentItem(with: item)
 
-            Task {
+            Task.detached(priority: .userInitiated) {
                 if let duration = try? await asset.load(.duration) {
                     let durMs = Int(CMTimeGetSeconds(duration) * 1000.0)
-                    DispatchQueue.main.async {
-                        self.parent.durationMs = max(0, durMs)
-                        self.parent.onDurationChanged?(max(0, durMs))
+                    if durMs > 0 {
+                        await MainActor.run {
+                            self.parent.durationMs = durMs
+                            self.parent.onDurationChanged?(durMs)
+                        }
                     }
                 }
 
                 if let videoTrack = try? await asset.loadTracks(withMediaType: .video).first,
                    let fps = try? await videoTrack.load(.nominalFrameRate), fps > 0 {
-                    DispatchQueue.main.async {
+                    await MainActor.run {
                         self.parent.frameRate = Double(fps)
                         LoggerService.shared.info("[VideoPlayer] Resolved video frame rate: \(fps) fps")
                     }
                 }
             }
         }
+
 
         public func stepFrame(forward: Bool, player: AVPlayer) {
             let frameDuration = 1.0 / parent.frameRate

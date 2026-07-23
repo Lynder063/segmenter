@@ -197,8 +197,10 @@ public struct MainWindowView: View {
         panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie, .item]
 
         if panel.runModal() == .OK, let rawUrl = panel.url {
-            self.statusMessage = "Loading \(rawUrl.lastPathComponent)..."
-            LoggerService.shared.info("[UI] User opened video file: \(rawUrl.path)")
+            // Set videoURL IMMEDIATELY — instant <10ms playback start matching IntroStamp!
+            self.videoURL = rawUrl
+            self.statusMessage = "Loaded \(rawUrl.lastPathComponent)"
+            LoggerService.shared.info("[UI] User opened video file instantly: \(rawUrl.path)")
 
             // Auto-parse filename hints
             let hint = FilenameMediaParser.parse(filePathOrName: rawUrl.path)
@@ -207,26 +209,25 @@ public struct MainWindowView: View {
             if let e = hint.episode { self.episode = String(e) }
             self.mediaType = hint.mediaTypeHint
 
-            Task {
-                // 1. Inspect metadata via ffprobe/AVFoundation to resolve duration & framerate FIRST
+            let initialDur = self.durationMs
+
+            // Asynchronous background metadata & audio waveform processing
+            Task.detached(priority: .userInitiated) {
+                // 1. Inspect metadata via ffprobe/AVFoundation in background
+                var currentDurMs = initialDur
                 if let meta = await FFmpegService.shared.inspectMedia(url: rawUrl) {
+                    if meta.durationMs > 0 { currentDurMs = meta.durationMs }
                     await MainActor.run {
-                        self.durationMs = meta.durationMs
-                        self.frameRate = meta.frameRate
+                        if meta.durationMs > 0 { self.durationMs = meta.durationMs }
+                        if meta.frameRate > 0 { self.frameRate = meta.frameRate }
                     }
                 }
 
-                // 2. Prepare playable URL (fast remux for MKV/x265 containers if needed)
-                let playableURL = await FFmpegService.shared.preparePlayableURL(url: rawUrl)
-                await MainActor.run {
-                    self.videoURL = playableURL
-                    self.statusMessage = "Loaded \(rawUrl.lastPathComponent)"
-                }
-
-                // 3. Extract audio waveform asynchronously
+                // 2. Extract audio waveform in background thread
+                let targetDuration = currentDurMs > 0 ? currentDurMs : 1800_000
                 if let (buckets, music) = try? await AudioExtractorService.shared.extractAudioWaveform(
                     videoURL: rawUrl,
-                    durationMs: max(1000, self.durationMs),
+                    durationMs: targetDuration,
                     progressHandler: { pct in
                         DispatchQueue.main.async {
                             self.statusMessage = "Analyzing audio... \(pct)%"
@@ -243,8 +244,10 @@ public struct MainWindowView: View {
                     }
                 }
             }
+
         }
     }
+
 
     private func togglePlay() {
         isPlaying.toggle()
