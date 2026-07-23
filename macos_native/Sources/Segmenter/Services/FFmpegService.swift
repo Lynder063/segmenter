@@ -209,14 +209,47 @@ public final class FFmpegService {
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
 
-            guard !data.isEmpty else {
-                throw NSError(domain: "FFmpegService", code: 2, userInfo: [NSLocalizedDescriptionKey: "ffmpeg audio stream empty"])
-            }
-
             return data.withUnsafeBytes { ptr in
                 Array(UnsafeBufferPointer(start: ptr.bindMemory(to: Int16.self).baseAddress, count: data.count / 2))
             }
         }.value
     }
 
+    // Extract fast 160x90 JPEG thumbnail at timeMs via ffmpeg
+    public func extractThumbnail(url: URL, timeMs: Int) async -> NSImage? {
+        guard let ffmpeg = ffmpegPath else { return nil }
+
+        return await Task.detached(priority: .userInitiated) {
+            let sec = Double(timeMs) / 1000.0
+            let tmpPath = "/tmp/thumb_\(abs(url.path.hashValue))_\(timeMs).jpg"
+
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: ffmpeg)
+            process.arguments = [
+                "-y",
+                "-ss", String(format: "%.3f", sec),
+                "-i", url.path,
+                "-vframes", "1",
+                "-s", "160x90",
+                "-f", "image2",
+                tmpPath
+            ]
+
+            process.standardOutput = Pipe()
+            process.standardError = Pipe()
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+                if process.terminationStatus == 0 && FileManager.default.fileExists(atPath: tmpPath),
+                   let image = NSImage(contentsOfFile: tmpPath) {
+                    try? FileManager.default.removeItem(atPath: tmpPath)
+                    return image
+                }
+            } catch {
+                // Ignore error
+            }
+            return nil
+        }.value
+    }
 }

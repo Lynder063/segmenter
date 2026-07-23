@@ -72,7 +72,9 @@ public struct FrameStripView: View {
             .frame(height: 65)
         }
         .padding(.vertical, 4)
-        .background(Color(red: 0.11, green: 0.11, blue: 0.12))
+        .onAppear {
+            generateThumbnailsIfNeeded(centerMs: currentPositionMs)
+        }
         .onChange(of: currentPositionMs) { newPos in
             generateThumbnailsIfNeeded(centerMs: newPos)
         }
@@ -85,6 +87,7 @@ public struct FrameStripView: View {
     private func isCurrentFrame(_ timeMs: Int) -> Bool {
         abs(timeMs - currentPositionMs) < 150
     }
+
 
     private func formatTimeMs(_ ms: Int) -> String {
         let sec = ms / 1000
@@ -115,6 +118,8 @@ public struct FrameStripView: View {
             let generator = AVAssetImageGenerator(asset: asset)
             generator.appliesPreferredTrackTransform = true
             generator.maximumSize = CGSize(width: 160, height: 90)
+            generator.requestedTimeToleranceBefore = CMTime(value: 500, timescale: 1000)
+            generator.requestedTimeToleranceAfter = CMTime(value: 500, timescale: 1000)
 
             var newThumbs: [ThumbnailItem] = []
             for timeMs in targetTimes {
@@ -122,6 +127,8 @@ public struct FrameStripView: View {
                 if let cgImage = try? generator.copyCGImage(at: cmTime, actualTime: nil) {
                     let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: 80, height: 45))
                     newThumbs.append(ThumbnailItem(timeMs: timeMs, image: nsImage))
+                } else if let ffImg = await FFmpegService.shared.extractThumbnail(url: url, timeMs: timeMs) {
+                    newThumbs.append(ThumbnailItem(timeMs: timeMs, image: ffImg))
                 }
             }
 
@@ -133,3 +140,4 @@ public struct FrameStripView: View {
         }
     }
 }
+
