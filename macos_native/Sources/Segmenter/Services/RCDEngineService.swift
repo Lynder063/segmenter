@@ -209,14 +209,14 @@ public final class RCDEngineService {
 
         progressHandler("Finalizing detected repeated sequence boundaries...", 90)
 
-        // Select best Intro match (highest confidence score)
+        // Select best Intro/Credits template (highest confidence score) from base episode
         let bestIntro = candidateIntroMatches.max(by: { $0.score < $1.score })
         let bestCredits = candidateCreditsMatches.max(by: { $0.score < $1.score })
 
         if let intro = bestIntro {
             let startSec = Double(intro.startBucket) * 0.25
             let endSec = Double(intro.endBucket) * 0.25
-            log(String(format: "RCD Match Found [INTRO]: %02d:%02d - %02d:%02d (Confidence: %.1f%%)", Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, intro.score * 100.0))
+            log(String(format: "RCD Template [INTRO]: %02d:%02d - %02d:%02d (Confidence: %.1f%%)", Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, intro.score * 100.0))
         } else {
             log(String(format: "No INTRO match found above similarity threshold %.0f%%", similarityThreshold * 100.0))
         }
@@ -224,34 +224,105 @@ public final class RCDEngineService {
         if let credits = bestCredits {
             let startSec = Double(credits.startBucket) * 0.25
             let endSec = Double(credits.endBucket) * 0.25
-            log(String(format: "RCD Match Found [CREDITS]: %02d:%02d - %02d:%02d (Confidence: %.1f%%)", Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, credits.score * 100.0))
+            log(String(format: "RCD Template [CREDITS]: %02d:%02d - %02d:%02d (Confidence: %.1f%%)", Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, credits.score * 100.0))
         } else {
             log(String(format: "No CREDITS match found above similarity threshold %.0f%%", similarityThreshold * 100.0))
         }
 
-        for video in videoFiles {
+        // Extract the template audio slice from the base episode
+        let baseName = sampleEpisodes.first?.lastPathComponent ?? ""
+        let baseBuckets = episodeFeatures[baseName]?.buckets ?? []
+
+        // Now locate exact intro/credits position PER EPISODE by sliding the template
+        for (epIdx, video) in videoFiles.enumerated() {
             let epName = video.lastPathComponent
             var matches: [RCDMatch] = []
 
+            guard let epData = episodeFeatures[epName] else {
+                results[epName] = matches
+                continue
+            }
+            let epBuckets = epData.buckets
+            let epTotalBuckets = epBuckets.count / 8
+
+            let pct = 90 + Int((Double(epIdx + 1) / Double(videoFiles.count)) * 9.0)
+            progressHandler("Locating segments for \(epName)...", pct)
+
+            // --- Per-episode INTRO localization ---
             if let intro = bestIntro {
-                let startSec = Double(intro.startBucket) * 0.25
-                let endSec = Double(intro.endBucket) * 0.25
-                matches.append(RCDMatch(type: .intro, startSec: startSec, endSec: endSec, confidence: intro.score))
+                let wLen = intro.endBucket - intro.startBucket
+                let templateSlice = Array(baseBuckets[(intro.startBucket * 8)..<(intro.endBucket * 8)])
+                let normT = self.vectorNorm(templateSlice)
+
+                let searchMax = min(3600, max(0, epTotalBuckets - wLen))
+                var bestSim: Float = 0
+                var bestStart = intro.startBucket // fallback to template position
+
+                if searchMax > 0 && normT > 0.01 {
+                    for targetIdx in stride(from: 0, to: searchMax, by: 4) {
+                        let end = (targetIdx + wLen) * 8
+                        guard end <= epBuckets.count else { break }
+                        let sliceB = Array(epBuckets[(targetIdx * 8)..<end])
+                        let normB = self.vectorNorm(sliceB)
+                        if normB > 0.01 {
+                            var dot: Float = 0
+                            vDSP_dotpr(templateSlice, 1, sliceB, 1, &dot, vDSP_Length(wLen * 8))
+                            let sim = dot / (normT * normB)
+                            if sim > bestSim {
+                                bestSim = sim
+                                bestStart = targetIdx
+                            }
+                        }
+                    }
+                }
+
+                let startSec = Double(bestStart) * 0.25
+                let endSec = Double(bestStart + wLen) * 0.25
+                matches.append(RCDMatch(type: .intro, startSec: startSec, endSec: endSec, confidence: bestSim > 0 ? bestSim : intro.score))
+                log(String(format: "  [%@] INTRO: %02d:%02d - %02d:%02d (%.1f%%)", epName, Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, (bestSim > 0 ? bestSim : intro.score) * 100.0))
             }
 
+            // --- Per-episode CREDITS localization ---
             if let credits = bestCredits {
-                let startSec = Double(credits.startBucket) * 0.25
-                let endSec = Double(credits.endBucket) * 0.25
-                matches.append(RCDMatch(type: .credits, startSec: startSec, endSec: endSec, confidence: credits.score))
-            }
+                let wLen = credits.endBucket - credits.startBucket
+                let templateSlice = Array(baseBuckets[(credits.startBucket * 8)..<(credits.endBucket * 8)])
+                let normT = self.vectorNorm(templateSlice)
 
+                let minSearch = max(0, epTotalBuckets - 2400)
+                var bestSim: Float = 0
+                var bestStart = credits.startBucket // fallback
+
+                if epTotalBuckets > wLen && normT > 0.01 {
+                    for targetIdx in stride(from: minSearch, to: max(minSearch + 1, epTotalBuckets - wLen), by: 4) {
+                        let end = (targetIdx + wLen) * 8
+                        guard end <= epBuckets.count else { break }
+                        let sliceB = Array(epBuckets[(targetIdx * 8)..<end])
+                        let normB = self.vectorNorm(sliceB)
+                        if normB > 0.01 {
+                            var dot: Float = 0
+                            vDSP_dotpr(templateSlice, 1, sliceB, 1, &dot, vDSP_Length(wLen * 8))
+                            let sim = dot / (normT * normB)
+                            if sim > bestSim {
+                                bestSim = sim
+                                bestStart = targetIdx
+                            }
+                        }
+                    }
+                }
+
+                let startSec = Double(bestStart) * 0.25
+                let endSec = Double(bestStart + wLen) * 0.25
+                matches.append(RCDMatch(type: .credits, startSec: startSec, endSec: endSec, confidence: bestSim > 0 ? bestSim : credits.score))
+                log(String(format: "  [%@] CREDITS: %02d:%02d - %02d:%02d (%.1f%%)", epName, Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, (bestSim > 0 ? bestSim : credits.score) * 100.0))
+            }
 
             results[epName] = matches
         }
 
-        log("Season scan complete across \(videoFiles.count) episodes!")
+        log("Season scan complete — located per-episode segments across \(videoFiles.count) episodes!")
         progressHandler("RCD Season Fingerprinting Complete!", 100)
         return results
+
         }.value
     }
 
