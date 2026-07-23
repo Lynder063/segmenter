@@ -12,13 +12,18 @@ let package = Package(
             targets: ["Segmenter"]
         )
     ],
-    dependencies: [],
+    dependencies: [
+        .package(url: "https://github.com/virtualox/vlckit-spm", branch: "main")
+    ],
     targets: [
         .executableTarget(
             name: "Segmenter",
-            dependencies: [],
+            dependencies: [
+                .product(name: "VLCKit", package: "vlckit-spm")
+            ],
             path: "Sources/Segmenter",
             resources: []
         )
     ]
 )
+

@@ -56,11 +56,11 @@ public struct MainWindowView: View {
 
             // Right Main Viewport
             VStack(spacing: 0) {
-                // Video Player Area
+                // Video Player Area (LibVLC Engine for 100% MKV, x265, HEVC, DTS, AC3 support)
                 ZStack {
                     Color.black
                     if videoURL != nil {
-                        NativeVideoPlayerView(
+                        VLCVideoPlayerView(
                             videoURL: $videoURL,
                             isPlaying: $isPlaying,
                             currentPositionMs: $currentPositionMs,
@@ -78,12 +78,13 @@ public struct MainWindowView: View {
                             Image(systemName: "film")
                                 .font(.system(size: 48))
                                 .foregroundColor(.secondary)
-                            Text("Open a local video file to begin timestamping")
+                            Text("Open a local video file (MKV, MP4, AVI, MOV) to begin timestamping")
                                 .foregroundColor(.secondary)
                         }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+
 
                 // Playback Control Bar
                 HStack(spacing: 12) {
@@ -206,9 +207,10 @@ public struct MainWindowView: View {
         panel.allowedContentTypes = types
 
         if panel.runModal() == .OK, let rawUrl = panel.url {
-            self.statusMessage = "Loading \(rawUrl.lastPathComponent)..."
-            LoggerService.shared.info("[UI] User opened video file: \(rawUrl.path)")
-
+            // Set videoURL IMMEDIATELY — instant LibVLC 0ms playback start!
+            self.videoURL = rawUrl
+            self.statusMessage = "Loaded \(rawUrl.lastPathComponent)"
+            LoggerService.shared.info("[UI] User opened video file with LibVLC engine: \(rawUrl.path)")
 
             // Auto-parse filename hints
             let hint = FilenameMediaParser.parse(filePathOrName: rawUrl.path)
@@ -217,15 +219,8 @@ public struct MainWindowView: View {
             if let e = hint.episode { self.episode = String(e) }
             self.mediaType = hint.mediaTypeHint
 
-            Task {
-                // 1. Prepare playable URL (fast ~0.3s remux for MKV/x265 to streamable MP4 so AVPlayer plays flawlessly)
-                let playableURL = await FFmpegService.shared.preparePlayableURL(url: rawUrl)
-                await MainActor.run {
-                    self.videoURL = playableURL
-                    self.statusMessage = "Loaded \(rawUrl.lastPathComponent)"
-                }
-
-                // 2. Inspect metadata via ffprobe/AVFoundation in background
+            Task.detached(priority: .userInitiated) {
+                // 1. Inspect metadata via ffprobe/AVFoundation in background
                 let initialDur = self.durationMs
                 var currentDurMs = initialDur
 
@@ -237,7 +232,7 @@ public struct MainWindowView: View {
                     }
                 }
 
-                // 3. Extract audio waveform in background thread (<0.3s)
+                // 2. Extract audio waveform in background thread (<0.3s)
                 let targetDuration = currentDurMs > 0 ? currentDurMs : 1800_000
                 if let (buckets, music) = try? await AudioExtractorService.shared.extractAudioWaveform(
                     videoURL: rawUrl,
@@ -260,6 +255,7 @@ public struct MainWindowView: View {
             }
         }
     }
+
 
 
 
