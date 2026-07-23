@@ -187,7 +187,7 @@ public final class FFmpegService {
     }
 
     // Extract 16-bit 1000Hz PCM Mono audio stream snippet via ffmpeg (ultra fast <0.15s)
-    public func extractPCMAudioSnippet(url: URL, durationSec: Int = 900) async throws -> [Int16] {
+    public func extractPCMAudioSnippet(url: URL, startSec: Int = 0, durationSec: Int = 900) async throws -> [Int16] {
         guard let ffmpeg = ffmpegPath else {
             throw NSError(domain: "FFmpegService", code: 1, userInfo: [NSLocalizedDescriptionKey: "ffmpeg binary not found"])
         }
@@ -197,7 +197,7 @@ public final class FFmpegService {
             process.executableURL = URL(fileURLWithPath: ffmpeg)
             process.arguments = [
                 "-nostdin",
-                "-ss", "0",
+                "-ss", "\(startSec)",
                 "-t", "\(durationSec)",
                 "-vn", "-sn",
                 "-i", url.path,
@@ -207,6 +207,7 @@ public final class FFmpegService {
                 "-threads", "0",
                 "pipe:1"
             ]
+
 
             let pipe = Pipe()
             process.standardInput = FileHandle.nullDevice

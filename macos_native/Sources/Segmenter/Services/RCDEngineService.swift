@@ -59,81 +59,107 @@ public final class RCDEngineService {
 
             log("Filtered \(videoFiles.count) video episode files (mp4, mkv, avi, mov, webm, m4v)")
 
+            // Natural sort filenames (S01E01, S01E02...)
+            videoFiles.sort { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
 
-        // Natural sort filenames (S01E01, S01E02...)
-        videoFiles.sort { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+            guard videoFiles.count >= 2 else {
+                throw NSError(domain: "RCDEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: "Season scan requires at least 2 episode videos"])
+            }
 
-        guard videoFiles.count >= 2 else {
-            throw NSError(domain: "RCDEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: "Season scan requires at least 2 episode videos"])
-        }
+            log("Found \(videoFiles.count) episode files in directory for RCD cross-correlation")
+            progressHandler("Preparing audio feature vectors...", 5)
 
-        log("Found \(videoFiles.count) episode files in directory for RCD cross-correlation")
-        progressHandler("Preparing audio feature vectors...", 5)
+            // 2. Extract SEPARATE intro (first 5 min) and credits (last 5 min) audio for each episode
+            let introExtractSec = 300  // first 5 minutes
+            let creditsExtractSec = 300 // last 5 minutes
 
-        // 2. Extract audio feature vectors for each episode (first 15 min & last 10 min)
-        var episodeFeatures: [String: (buckets: [Float], durationMs: Int)] = [:]
+            struct EpisodeAudio {
+                let introFeatures: [Float]  // FFT features from first 5 min
+                let creditsFeatures: [Float] // FFT features from last 5 min
+                let durationSec: Int         // total episode duration
+            }
 
-        for (idx, video) in videoFiles.enumerated() {
-            let pct = 5 + Int((Double(idx + 1) / Double(videoFiles.count)) * 50.0)
-            progressHandler("Extracting feature vector for \(video.lastPathComponent)...", pct)
-            log("Extracting audio PCM feature vector (\(idx + 1)/\(videoFiles.count)): \(video.lastPathComponent)")
+            var episodeAudio: [String: EpisodeAudio] = [:]
 
-            let buckets = await self.extractFastFeatureVector(url: video)
-            log("Extracted \(buckets.count) feature buckets for \(video.lastPathComponent) (0.15s)")
-            episodeFeatures[video.lastPathComponent] = (buckets, 1_800_000)
-        }
+            for (idx, video) in videoFiles.enumerated() {
+                let pct = 5 + Int((Double(idx + 1) / Double(videoFiles.count)) * 40.0)
+                progressHandler("Extracting audio for \(video.lastPathComponent)...", pct)
+                log("Extracting audio (intro + credits) (\(idx + 1)/\(videoFiles.count)): \(video.lastPathComponent)")
 
-        log("Executing SIMD vector cross-correlation via Accelerate vDSP_dotpr across episode matrices...")
-        progressHandler("Cross-correlating episode fingerprints via Accelerate SIMD...", 65)
+                // Get episode duration via ffprobe
+                var epDurationSec = 3000 // fallback 50 min
+                if let meta = await FFmpegService.shared.inspectMedia(url: video) {
+                    epDurationSec = max(meta.durationMs / 1000, 600)
+                    log("  Duration: \(epDurationSec / 60)m \(epDurationSec % 60)s")
+                }
 
-        // 3. Perform pairwise cross-correlation using Accelerate SIMD vDSP_dotpr
-        var results: [String: [RCDMatch]] = [:]
+                // Extract first 5 minutes (for intro detection)
+                let introFeatures = await self.extractFeatureVector(
+                    url: video, startSec: 0, durationSec: introExtractSec
+                )
+                log("  Intro region: \(introFeatures.count / 8) buckets (first \(introExtractSec)s)")
 
-        // Take up to 5 episodes for fast pair cross-correlation
-        let sampleEpisodes = Array(videoFiles.prefix(5))
-        var candidateIntroMatches: [(startBucket: Int, endBucket: Int, score: Float)] = []
-        var candidateCreditsMatches: [(startBucket: Int, endBucket: Int, score: Float)] = []
+                // Extract last 5 minutes (for credits detection)
+                let creditsStartSec = max(0, epDurationSec - creditsExtractSec)
+                let creditsFeatures = await self.extractFeatureVector(
+                    url: video, startSec: creditsStartSec, durationSec: creditsExtractSec
+                )
+                log("  Credits region: \(creditsFeatures.count / 8) buckets (last \(creditsExtractSec)s, from \(creditsStartSec)s)")
 
-        // Intro Search Window: First 15 minutes (0..3600 buckets @ 4 buckets/sec)
-        // Credits Search Window: Last 10 minutes
-        if let baseName = sampleEpisodes.first?.lastPathComponent,
-           let baseData = episodeFeatures[baseName] {
+                episodeAudio[video.lastPathComponent] = EpisodeAudio(
+                    introFeatures: introFeatures,
+                    creditsFeatures: creditsFeatures,
+                    durationSec: epDurationSec
+                )
+            }
 
-            let baseBuckets = baseData.buckets
-            let totalBuckets = baseBuckets.count / 8
+            progressHandler("Cross-correlating intro fingerprints...", 50)
+            log("Phase 2: Cross-correlating intro audio across episodes...")
+
+            // 3. Find repeating INTRO pattern by cross-correlating first-5-min audio across episodes
+            let sampleEpisodes = Array(videoFiles.prefix(5))
             let targetThresh = Float(similarityThreshold)
 
-            // Window lengths to evaluate in buckets (4 buckets/sec): 30s (120 buckets), 45s (180), 60s (240), 90s (360), 120s (480)
-            let windowLengths = [120, 180, 240, 360, 480]
+            // Window lengths in buckets (4 buckets/sec): 20s=80, 30s=120, 45s=180, 60s=240
+            let introWindowLengths = [80, 120, 180, 240]
+            let creditsWindowLengths = [80, 120, 180, 240]
 
-            // 3a. Search Intro Candidates in first 15 mins (max bucket 3600)
-            let maxIntroSearch = min(3600, max(0, totalBuckets - 120))
+            var bestIntroTemplate: (startBucket: Int, wLen: Int, score: Float, baseName: String)?
+            var bestCreditsTemplate: (startBucket: Int, wLen: Int, score: Float, baseName: String)?
 
-            for wLen in windowLengths {
-                if maxIntroSearch <= wLen { continue }
+            // --- INTRO template detection ---
+            if let baseName = sampleEpisodes.first?.lastPathComponent,
+               let baseAudio = episodeAudio[baseName] {
 
-                for startIdx in stride(from: 0, to: maxIntroSearch - wLen, by: 4) { // step by 1 sec
-                    let sliceA = Array(baseBuckets[(startIdx * 8)..<((startIdx + wLen) * 8)])
-                    let normA = self.vectorNorm(sliceA)
-                    guard normA > 0.01 else { continue }
+                let baseBuckets = baseAudio.introFeatures
+                let totalBuckets = baseBuckets.count / 8
 
-                    var matchCount = 0
-                    var totalScore: Float = 0
+                for wLen in introWindowLengths {
+                    guard totalBuckets > wLen else { continue }
 
-                    for ep in sampleEpisodes.dropFirst() {
-                        if let epData = episodeFeatures[ep.lastPathComponent] {
-                            let epBuckets = epData.buckets
-                            let epTotalBuckets = epBuckets.count / 8
-                            let epSearchMax = min(3600, max(0, epTotalBuckets - wLen))
+                    for startIdx in stride(from: 0, to: totalBuckets - wLen, by: 4) {
+                        let sliceA = Array(baseBuckets[(startIdx * 8)..<((startIdx + wLen) * 8)])
+                        let normA = self.vectorNorm(sliceA)
+                        guard normA > 0.01 else { continue }
+
+                        var matchCount = 0
+                        var totalScore: Float = 0
+
+                        for ep in sampleEpisodes.dropFirst() {
+                            guard let epAudio = episodeAudio[ep.lastPathComponent] else { continue }
+                            let epBuckets = epAudio.introFeatures
+                            let epTotal = epBuckets.count / 8
                             var bestSim: Float = 0
 
-                            // Slide within +-60 seconds window in target episode
+                            // Search within +-60s window
                             let searchStart = max(0, startIdx - 240)
-                            let searchEnd = min(epSearchMax - wLen, startIdx + 240)
+                            let searchEnd = min(max(0, epTotal - wLen), startIdx + 240)
 
                             if searchEnd > searchStart {
                                 for targetIdx in stride(from: searchStart, to: searchEnd, by: 4) {
-                                    let sliceB = Array(epBuckets[(targetIdx * 8)..<((targetIdx + wLen) * 8)])
+                                    let end = (targetIdx + wLen) * 8
+                                    guard end <= epBuckets.count else { break }
+                                    let sliceB = Array(epBuckets[(targetIdx * 8)..<end])
                                     let normB = self.vectorNorm(sliceB)
                                     if normB > 0.01 {
                                         var dot: Float = 0
@@ -149,39 +175,53 @@ public final class RCDEngineService {
                                 totalScore += bestSim
                             }
                         }
-                    }
 
-                    if matchCount >= max(1, sampleEpisodes.count - 2) {
-                        let avgScore = totalScore / Float(matchCount)
-                        candidateIntroMatches.append((startBucket: startIdx, endBucket: startIdx + wLen, score: avgScore))
+                        if matchCount >= max(1, sampleEpisodes.count - 2) {
+                            let avgScore = totalScore / Float(matchCount)
+                            if bestIntroTemplate == nil || avgScore > bestIntroTemplate!.score {
+                                bestIntroTemplate = (startBucket: startIdx, wLen: wLen, score: avgScore, baseName: baseName)
+                            }
+                        }
                     }
                 }
             }
 
-            // 3b. Search Credits Candidates in last 10 mins
-            let minCreditsSearch = max(0, totalBuckets - 2400)
-            for wLen in [120, 180, 240, 360] {
-                if totalBuckets - minCreditsSearch <= wLen { continue }
-                for startIdx in stride(from: minCreditsSearch, to: max(minCreditsSearch + 1, totalBuckets - wLen), by: 8) {
-                    let sliceA = Array(baseBuckets[(startIdx * 8)..<((startIdx + wLen) * 8)])
-                    let normA = self.vectorNorm(sliceA)
-                    guard normA > 0.01 else { continue }
+            progressHandler("Cross-correlating credits fingerprints...", 60)
+            log("Phase 3: Cross-correlating credits audio across episodes...")
 
-                    var matchCount = 0
-                    var totalScore: Float = 0
+            // --- CREDITS template detection ---
+            if let baseName = sampleEpisodes.first?.lastPathComponent,
+               let baseAudio = episodeAudio[baseName] {
 
-                    for ep in sampleEpisodes.dropFirst() {
-                        if let epData = episodeFeatures[ep.lastPathComponent] {
-                            let epBuckets = epData.buckets
-                            let epTotalBuckets = epBuckets.count / 8
-                            let epMinCredits = max(0, epTotalBuckets - 2400)
+                let baseBuckets = baseAudio.creditsFeatures
+                let totalBuckets = baseBuckets.count / 8
+
+                for wLen in creditsWindowLengths {
+                    guard totalBuckets > wLen else { continue }
+
+                    for startIdx in stride(from: 0, to: totalBuckets - wLen, by: 4) {
+                        let sliceA = Array(baseBuckets[(startIdx * 8)..<((startIdx + wLen) * 8)])
+                        let normA = self.vectorNorm(sliceA)
+                        guard normA > 0.01 else { continue }
+
+                        var matchCount = 0
+                        var totalScore: Float = 0
+
+                        for ep in sampleEpisodes.dropFirst() {
+                            guard let epAudio = episodeAudio[ep.lastPathComponent] else { continue }
+                            let epBuckets = epAudio.creditsFeatures
+                            let epTotal = epBuckets.count / 8
                             var bestSim: Float = 0
 
-                            if epTotalBuckets > wLen {
-                                for targetIdx in stride(from: epMinCredits, to: epTotalBuckets - wLen, by: 8) {
-                                    let sliceB = Array(epBuckets[(targetIdx * 8)..<((targetIdx + wLen) * 8)])
-                                    let normB = self.vectorNorm(sliceB)
+                            let searchStart = max(0, startIdx - 240)
+                            let searchEnd = min(max(0, epTotal - wLen), startIdx + 240)
 
+                            if searchEnd > searchStart {
+                                for targetIdx in stride(from: searchStart, to: searchEnd, by: 4) {
+                                    let end = (targetIdx + wLen) * 8
+                                    guard end <= epBuckets.count else { break }
+                                    let sliceB = Array(epBuckets[(targetIdx * 8)..<end])
+                                    let normB = self.vectorNorm(sliceB)
                                     if normB > 0.01 {
                                         var dot: Float = 0
                                         vDSP_dotpr(sliceA, 1, sliceB, 1, &dot, vDSP_Length(wLen * 8))
@@ -196,139 +236,150 @@ public final class RCDEngineService {
                                 totalScore += bestSim
                             }
                         }
-                    }
 
-                    if matchCount >= max(1, sampleEpisodes.count - 2) {
-                        let avgScore = totalScore / Float(matchCount)
-                        candidateCreditsMatches.append((startBucket: startIdx, endBucket: startIdx + wLen, score: avgScore))
+                        if matchCount >= max(1, sampleEpisodes.count - 2) {
+                            let avgScore = totalScore / Float(matchCount)
+                            if bestCreditsTemplate == nil || avgScore > bestCreditsTemplate!.score {
+                                bestCreditsTemplate = (startBucket: startIdx, wLen: wLen, score: avgScore, baseName: baseName)
+                            }
+                        }
                     }
                 }
             }
-        }
 
+            // Log discovered templates
+            if let t = bestIntroTemplate {
+                let s = Double(t.startBucket) * 0.25, e = Double(t.startBucket + t.wLen) * 0.25
+                log(String(format: "INTRO template found in first 5 min: %02d:%02d - %02d:%02d (%.1f%%)", Int(s)/60, Int(s)%60, Int(e)/60, Int(e)%60, t.score * 100))
+            } else {
+                log("No INTRO template found above threshold")
+            }
+            if let t = bestCreditsTemplate {
+                let s = Double(t.startBucket) * 0.25, e = Double(t.startBucket + t.wLen) * 0.25
+                log(String(format: "CREDITS template found in last 5 min: %02d:%02d - %02d:%02d offset (%.1f%%)", Int(s)/60, Int(s)%60, Int(e)/60, Int(e)%60, t.score * 100))
+            } else {
+                log("No CREDITS template found above threshold")
+            }
 
-        progressHandler("Finalizing detected repeated sequence boundaries...", 90)
+            progressHandler("Locating per-episode segment positions...", 75)
 
-        // Select best Intro/Credits template (highest confidence score) from base episode
-        let bestIntro = candidateIntroMatches.max(by: { $0.score < $1.score })
-        let bestCredits = candidateCreditsMatches.max(by: { $0.score < $1.score })
+            // 4. For each episode, locate exact intro/credits position by sliding the template
+            var results: [String: [RCDMatch]] = [:]
 
-        if let intro = bestIntro {
-            let startSec = Double(intro.startBucket) * 0.25
-            let endSec = Double(intro.endBucket) * 0.25
-            log(String(format: "RCD Template [INTRO]: %02d:%02d - %02d:%02d (Confidence: %.1f%%)", Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, intro.score * 100.0))
-        } else {
-            log(String(format: "No INTRO match found above similarity threshold %.0f%%", similarityThreshold * 100.0))
-        }
+            for (epIdx, video) in videoFiles.enumerated() {
+                let epName = video.lastPathComponent
+                var matches: [RCDMatch] = []
 
-        if let credits = bestCredits {
-            let startSec = Double(credits.startBucket) * 0.25
-            let endSec = Double(credits.endBucket) * 0.25
-            log(String(format: "RCD Template [CREDITS]: %02d:%02d - %02d:%02d (Confidence: %.1f%%)", Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, credits.score * 100.0))
-        } else {
-            log(String(format: "No CREDITS match found above similarity threshold %.0f%%", similarityThreshold * 100.0))
-        }
+                guard let epAudio = episodeAudio[epName] else {
+                    results[epName] = matches
+                    continue
+                }
 
-        // Extract the template audio slice from the base episode
-        let baseName = sampleEpisodes.first?.lastPathComponent ?? ""
-        let baseBuckets = episodeFeatures[baseName]?.buckets ?? []
+                let pct = 75 + Int((Double(epIdx + 1) / Double(videoFiles.count)) * 20.0)
+                progressHandler("Locating segments for \(epName)...", pct)
 
-        // Now locate exact intro/credits position PER EPISODE by sliding the template
-        for (epIdx, video) in videoFiles.enumerated() {
-            let epName = video.lastPathComponent
-            var matches: [RCDMatch] = []
+                // --- Per-episode INTRO localization (in first-5-min audio) ---
+                if let t = bestIntroTemplate {
+                    let baseBuckets = episodeAudio[t.baseName]!.introFeatures
+                    let templateSlice = Array(baseBuckets[(t.startBucket * 8)..<((t.startBucket + t.wLen) * 8)])
+                    let normT = self.vectorNorm(templateSlice)
 
-            guard let epData = episodeFeatures[epName] else {
+                    let epBuckets = epAudio.introFeatures
+                    let epTotal = epBuckets.count / 8
+                    let searchMax = max(0, epTotal - t.wLen)
+                    var bestSim: Float = 0
+                    var bestStart = t.startBucket
+
+                    if searchMax > 0 && normT > 0.01 {
+                        for targetIdx in stride(from: 0, to: searchMax, by: 2) {
+                            let end = (targetIdx + t.wLen) * 8
+                            guard end <= epBuckets.count else { break }
+                            let sliceB = Array(epBuckets[(targetIdx * 8)..<end])
+                            let normB = self.vectorNorm(sliceB)
+                            if normB > 0.01 {
+                                var dot: Float = 0
+                                vDSP_dotpr(templateSlice, 1, sliceB, 1, &dot, vDSP_Length(t.wLen * 8))
+                                let sim = dot / (normT * normB)
+                                if sim > bestSim {
+                                    bestSim = sim
+                                    bestStart = targetIdx
+                                }
+                            }
+                        }
+                    }
+
+                    // startSec/endSec are absolute times (intro is from start of video)
+                    let startSec = Double(bestStart) * 0.25
+                    let endSec = Double(bestStart + t.wLen) * 0.25
+                    let conf = bestSim > 0 ? bestSim : t.score
+                    matches.append(RCDMatch(type: .intro, startSec: startSec, endSec: endSec, confidence: conf))
+                    log(String(format: "  [%@] INTRO: %02d:%02d - %02d:%02d (%.1f%%)", epName, Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, conf * 100))
+                }
+
+                // --- Per-episode CREDITS localization (in last-5-min audio) ---
+                if let t = bestCreditsTemplate {
+                    let baseBuckets = episodeAudio[t.baseName]!.creditsFeatures
+                    let templateSlice = Array(baseBuckets[(t.startBucket * 8)..<((t.startBucket + t.wLen) * 8)])
+                    let normT = self.vectorNorm(templateSlice)
+
+                    let epBuckets = epAudio.creditsFeatures
+                    let epTotal = epBuckets.count / 8
+                    let searchMax = max(0, epTotal - t.wLen)
+                    var bestSim: Float = 0
+                    var bestStart = t.startBucket
+
+                    if searchMax > 0 && normT > 0.01 {
+                        for targetIdx in stride(from: 0, to: searchMax, by: 2) {
+                            let end = (targetIdx + t.wLen) * 8
+                            guard end <= epBuckets.count else { break }
+                            let sliceB = Array(epBuckets[(targetIdx * 8)..<end])
+                            let normB = self.vectorNorm(sliceB)
+                            if normB > 0.01 {
+                                var dot: Float = 0
+                                vDSP_dotpr(templateSlice, 1, sliceB, 1, &dot, vDSP_Length(t.wLen * 8))
+                                let sim = dot / (normT * normB)
+                                if sim > bestSim {
+                                    bestSim = sim
+                                    bestStart = targetIdx
+                                }
+                            }
+                        }
+                    }
+
+                    // Convert offset within last-5-min segment to absolute time
+                    let creditsStartOffset = max(0, epAudio.durationSec - creditsExtractSec)
+                    let startSec = Double(creditsStartOffset) + Double(bestStart) * 0.25
+                    let endSec = Double(creditsStartOffset) + Double(bestStart + t.wLen) * 0.25
+                    let conf = bestSim > 0 ? bestSim : t.score
+                    matches.append(RCDMatch(type: .credits, startSec: startSec, endSec: endSec, confidence: conf))
+                    log(String(format: "  [%@] CREDITS: %02d:%02d - %02d:%02d (%.1f%%)", epName, Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, conf * 100))
+                }
+
                 results[epName] = matches
-                continue
-            }
-            let epBuckets = epData.buckets
-            let epTotalBuckets = epBuckets.count / 8
-
-            let pct = 90 + Int((Double(epIdx + 1) / Double(videoFiles.count)) * 9.0)
-            progressHandler("Locating segments for \(epName)...", pct)
-
-            // --- Per-episode INTRO localization ---
-            if let intro = bestIntro {
-                let wLen = intro.endBucket - intro.startBucket
-                let templateSlice = Array(baseBuckets[(intro.startBucket * 8)..<(intro.endBucket * 8)])
-                let normT = self.vectorNorm(templateSlice)
-
-                let searchMax = min(3600, max(0, epTotalBuckets - wLen))
-                var bestSim: Float = 0
-                var bestStart = intro.startBucket // fallback to template position
-
-                if searchMax > 0 && normT > 0.01 {
-                    for targetIdx in stride(from: 0, to: searchMax, by: 4) {
-                        let end = (targetIdx + wLen) * 8
-                        guard end <= epBuckets.count else { break }
-                        let sliceB = Array(epBuckets[(targetIdx * 8)..<end])
-                        let normB = self.vectorNorm(sliceB)
-                        if normB > 0.01 {
-                            var dot: Float = 0
-                            vDSP_dotpr(templateSlice, 1, sliceB, 1, &dot, vDSP_Length(wLen * 8))
-                            let sim = dot / (normT * normB)
-                            if sim > bestSim {
-                                bestSim = sim
-                                bestStart = targetIdx
-                            }
-                        }
-                    }
-                }
-
-                let startSec = Double(bestStart) * 0.25
-                let endSec = Double(bestStart + wLen) * 0.25
-                matches.append(RCDMatch(type: .intro, startSec: startSec, endSec: endSec, confidence: bestSim > 0 ? bestSim : intro.score))
-                log(String(format: "  [%@] INTRO: %02d:%02d - %02d:%02d (%.1f%%)", epName, Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, (bestSim > 0 ? bestSim : intro.score) * 100.0))
             }
 
-            // --- Per-episode CREDITS localization ---
-            if let credits = bestCredits {
-                let wLen = credits.endBucket - credits.startBucket
-                let templateSlice = Array(baseBuckets[(credits.startBucket * 8)..<(credits.endBucket * 8)])
-                let normT = self.vectorNorm(templateSlice)
-
-                let minSearch = max(0, epTotalBuckets - 2400)
-                var bestSim: Float = 0
-                var bestStart = credits.startBucket // fallback
-
-                if epTotalBuckets > wLen && normT > 0.01 {
-                    for targetIdx in stride(from: minSearch, to: max(minSearch + 1, epTotalBuckets - wLen), by: 4) {
-                        let end = (targetIdx + wLen) * 8
-                        guard end <= epBuckets.count else { break }
-                        let sliceB = Array(epBuckets[(targetIdx * 8)..<end])
-                        let normB = self.vectorNorm(sliceB)
-                        if normB > 0.01 {
-                            var dot: Float = 0
-                            vDSP_dotpr(templateSlice, 1, sliceB, 1, &dot, vDSP_Length(wLen * 8))
-                            let sim = dot / (normT * normB)
-                            if sim > bestSim {
-                                bestSim = sim
-                                bestStart = targetIdx
-                            }
-                        }
-                    }
-                }
-
-                let startSec = Double(bestStart) * 0.25
-                let endSec = Double(bestStart + wLen) * 0.25
-                matches.append(RCDMatch(type: .credits, startSec: startSec, endSec: endSec, confidence: bestSim > 0 ? bestSim : credits.score))
-                log(String(format: "  [%@] CREDITS: %02d:%02d - %02d:%02d (%.1f%%)", epName, Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, (bestSim > 0 ? bestSim : credits.score) * 100.0))
-            }
-
-            results[epName] = matches
-        }
-
-        log("Season scan complete — located per-episode segments across \(videoFiles.count) episodes!")
-        progressHandler("RCD Season Fingerprinting Complete!", 100)
-        return results
+            log("Season scan complete — located per-episode segments across \(videoFiles.count) episodes!")
+            progressHandler("RCD Season Fingerprinting Complete!", 100)
+            return results
 
         }.value
     }
 
 
+
+    private func extractFeatureVector(url: URL, startSec: Int, durationSec: Int) async -> [Float] {
+        let pcmSamples = (try? await FFmpegService.shared.extractPCMAudioSnippet(
+            url: url, startSec: startSec, durationSec: durationSec
+        )) ?? []
+        return computeFFTFeatures(from: pcmSamples)
+    }
+
     private func extractFastFeatureVector(url: URL) async -> [Float] {
         let pcmSamples = (try? await FFmpegService.shared.extractPCMAudioSnippet(url: url, durationSec: 900)) ?? []
+        return computeFFTFeatures(from: pcmSamples)
+    }
+
+    private func computeFFTFeatures(from pcmSamples: [Int16]) -> [Float] {
         guard pcmSamples.count >= 2000 else { return [] }
 
         // Downsampled audio at 4000 Hz -> 1000 samples per 0.25s bucket
@@ -400,4 +451,3 @@ public final class RCDEngineService {
     }
 
 }
-
