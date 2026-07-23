@@ -196,23 +196,27 @@ public final class FFmpegService {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: ffmpeg)
             process.arguments = [
+                "-nostdin",
                 "-ss", "0",
                 "-t", "\(durationSec)",
+                "-vn", "-sn",
                 "-i", url.path,
                 "-f", "s16le",
                 "-ac", "1",
-                "-ar", "1000",
+                "-ar", "4000",
                 "-threads", "0",
                 "pipe:1"
             ]
 
             let pipe = Pipe()
+            process.standardInput = FileHandle.nullDevice
             process.standardOutput = pipe
             process.standardError = FileHandle.nullDevice
 
             try process.run()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
+
 
 
             guard !data.isEmpty else {
@@ -239,6 +243,7 @@ public final class FFmpegService {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: ffmpeg)
             process.arguments = [
+                "-nostdin",
                 "-ss", String(format: "%.3f", sec),
                 "-i", url.path,
                 "-vframes", "1",
@@ -248,10 +253,11 @@ public final class FFmpegService {
                 "pipe:1"
             ]
 
-
             let pipe = Pipe()
+            process.standardInput = FileHandle.nullDevice
             process.standardOutput = pipe
             process.standardError = FileHandle.nullDevice
+
 
 
             do {
