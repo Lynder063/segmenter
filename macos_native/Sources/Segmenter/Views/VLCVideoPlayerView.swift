@@ -64,12 +64,13 @@ public struct VLCVideoPlayerView: NSViewRepresentable {
         }
 
         func setupPlayer(containerView: NSView) {
-            let library = VLCLibrary(options: ["--no-macosx-video-autoresize", "--quiet"])
+            let library = VLCLibrary(options: ["--quiet"])
             let player = VLCMediaPlayer(library: library)
             player.drawable = containerView
             player.delegate = self
             self.mediaPlayer = player
         }
+
 
 
         func loadMedia(url: URL) {
