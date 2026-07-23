@@ -1,13 +1,14 @@
 # 🎬 Segmenter
 
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows-blue.svg)]()
-[![Python](https://img.shields.io/badge/Linux_Stack-Python_3.10+-yellow.svg)]()
-[![Qt](https://img.shields.io/badge/Linux_UI-PySide6%20(Qt6)-41cd52.svg)]()
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS-blue.svg)]()
+[![macOS](https://img.shields.io/badge/macOS_Arch-arm64%20%7C%20x86__64-silver.svg)]()
+[![Python](https://img.shields.io/badge/Linux%2FmacOS_Stack-Python_3.10+-yellow.svg)]()
+[![Qt](https://img.shields.io/badge/UI-PySide6%20(Qt6)-41cd52.svg)]()
 [![Dotnet](https://img.shields.io/badge/Windows_Stack-.NET_8.0-purple.svg)]()
 [![WPF](https://img.shields.io/badge/Windows_UI-WPF-blue.svg)]()
 
-**Segmenter** is a high-performance visual timestamp annotation tool for Linux and Windows. It lets you create, edit, and upload media segment markers — **Intro**, **Recap**, **Credits**, and **Preview** — to [TheIntroDB](https://theintrodb.org) and [IntroDB](https://introdb.app).
+**Segmenter** is a high-performance visual timestamp annotation tool for Linux, Windows, and macOS (supporting Apple Silicon `arm64` and Intel `x86_64`). It lets you create, edit, and upload media segment markers — **Intro**, **Recap**, **Credits**, and **Preview** — to [TheIntroDB](https://theintrodb.org) and [IntroDB](https://introdb.app).
 
 ![Segmenter App Layout](docs/screenshot.png)
 
@@ -23,8 +24,9 @@ Real-time MJPEG-based frame strip centered on the playhead for frame-accurate se
 
 ### 🤖 GPU-Accelerated Season Fingerprinting
 Integrated **Recurring Content Detector (RCD)** scans an entire season directory and automatically finds duplicate segments across episodes using:
-- **FAISS-GPU** nearest-neighbor search (NVIDIA) or FAISS-CPU (AMD / no GPU)
+- **FAISS-GPU** nearest-neighbor search (NVIDIA) or FAISS-CPU (AMD / Apple / CPU)
 - **CNN feature extraction** (MobileNetV3 or SimpleCNN fallback via PyTorch)
+- **Apple Silicon MPS** (Metal Performance Shaders) GPU acceleration on M1/M2/M3/M4 Macs
 - **Color Histogram** and **Color Texture Moment** modes for CPU-only setups
 - **AMD ROCm** support — PyTorch ROCm builds accelerate CNN feature extraction on AMD GPUs
 - **NVIDIA CUDA** support — full GPU acceleration including FAISS-GPU
@@ -62,6 +64,29 @@ API keys are stored in `~/.config/Segmenter/keys.json` — no keyring daemon req
 | <kbd>C</kbd> / <kbd>Shift+C</kbd> | Set Credits start / end |
 | <kbd>P</kbd> / <kbd>Shift+P</kbd> | Set Preview start / end |
 | <kbd>,</kbd> | Snap nearest segment edge to playhead |
+
+---
+
+## 🚀 Quick Start (macOS — arm64 & x86_64)
+
+### Prerequisites
+
+| Dependency | Purpose |
+|---|---|
+| `python3` (≥ 3.10) | Runtime (`brew install python@3.11`) |
+| `ffmpeg` | Audio extraction and frame strip thumbnails (`brew install ffmpeg`) |
+
+### Run
+
+```bash
+./macos/run.sh
+```
+
+### Build Standalone App (.app / .dmg)
+
+```bash
+./macos/build_app.sh
+```
 
 ---
 
@@ -116,7 +141,11 @@ Build standalone `.deb`, `.rpm`, and Arch Linux packages:
 ./linux/build_packages.sh
 ```
 
-Output artifacts are placed in `linux/dist/`.
+Build standalone macOS `.app` and `.dmg`:
+
+```bash
+./macos/build_app.sh
+```
 
 ---
 
@@ -124,6 +153,13 @@ Output artifacts are placed in `linux/dist/`.
 
 ```
 .
+├── macos/                  # macOS Port (arm64 & x86_64)
+│   ├── app.py              # macOS Entry point & Native Menu Bar
+│   ├── run.sh              # macOS Quick Start launcher
+│   ├── build_app.sh        # PyInstaller bundle & DMG builder
+│   ├── Info.plist          # Apple Bundle Metadata (Retina, File associations)
+│   ├── requirements.txt    # macOS dependencies
+│   └── README.md           # macOS documentation
 ├── windows/
 │   ├── build.ps1           # Windows Build Script
 │   ├── Segmenter/          # WPF C# Application
@@ -142,7 +178,7 @@ Output artifacts are placed in `linux/dist/`.
 │   ├── parser.py           # Filename → TMDB metadata parser
 │   ├── validator.py        # Segment validation rules
 │   ├── rcd_integration.py  # RCD scan dialog & worker
-│   ├── gpu.py              # Unified GPU detection (CUDA / ROCm / CPU)
+│   ├── gpu.py              # Unified GPU detection (CUDA / ROCm / MPS / CPU)
 │   ├── rcd/                # Recurring Content Detector engine
 │   │   ├── detector.py     # Main detection pipeline
 │   │   ├── featurevectors.py # Feature vector extraction (CH, CTM, CNN)
@@ -156,6 +192,7 @@ Output artifacts are placed in `linux/dist/`.
 ├── LICENSE
 └── README.md
 ```
+
 
 ---
 
