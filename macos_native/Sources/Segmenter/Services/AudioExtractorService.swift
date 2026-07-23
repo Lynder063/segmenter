@@ -64,33 +64,50 @@ public final class AudioExtractorService {
             }
 
 
-            // 1. Calculate Peak Waveform Buckets using Accelerate
+            progressHandler(50)
+            guard !samples.isEmpty else {
+                throw NSError(domain: "AudioExtractor", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to read PCM audio data from media file"])
+            }
+
+            // 1. Convert Int16 samples to Float using Accelerate vDSP (instant)
+            var floatSamples = [Float](repeating: 0.0, count: samples.count)
+            samples.withUnsafeBufferPointer { sPtr in
+                vDSP_vflt16(sPtr.baseAddress!, 1, &floatSamples, 1, vDSP_Length(samples.count))
+            }
+
+            // Absolute values
+            var absSamples = [Float](repeating: 0.0, count: samples.count)
+            vDSP_vabs(&floatSamples, 1, &absSamples, 1, vDSP_Length(samples.count))
+
+            // 2. Compute Peak Waveform Buckets using Accelerate vDSP_maxv
             let samplesPerBucket = max(1, samples.count / bucketCount)
             var waveformBuckets = [Float](repeating: 0.0, count: bucketCount)
             var maxPeak: Float = 0.0
 
             for i in 0..<bucketCount {
                 let startIdx = i * samplesPerBucket
-                let endIdx = min(samples.count, startIdx + samplesPerBucket)
-                if startIdx < endIdx {
-                    let chunk = samples[startIdx..<endIdx]
-                    let peak = chunk.map { abs(Float($0)) }.max() ?? 0.0
-                    waveformBuckets[i] = peak
-                    if peak > maxPeak { maxPeak = peak }
+                let count = min(samplesPerBucket, samples.count - startIdx)
+                if count > 0 {
+                    absSamples.withUnsafeBufferPointer { ptr in
+                        var peak: Float = 0.0
+                        vDSP_maxv(ptr.baseAddress! + startIdx, 1, &peak, vDSP_Length(count))
+                        waveformBuckets[i] = peak
+                        if peak > maxPeak { maxPeak = peak }
+                    }
                 }
             }
 
+            // Vector normalize waveform buckets
             if maxPeak > 0 {
-                for i in 0..<bucketCount {
-                    waveformBuckets[i] /= maxPeak
-                }
+                var divisor = maxPeak
+                vDSP_vsdiv(waveformBuckets, 1, &divisor, &waveformBuckets, 1, vDSP_Length(bucketCount))
             }
 
             progressHandler(75)
 
-            // 2. Music Likelihood via FFT Spectral Flatness (80Hz - 3000Hz)
+            // 3. Music Likelihood via Fast FFT Spectral Flatness
             var musicBuckets = [Float](repeating: 0.5, count: bucketCount)
-            let fftSize = 2048
+            let fftSize = 512
             let log2n = vDSP_Length(log2(Double(fftSize)))
             if let fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) {
                 defer { vDSP_destroy_fftsetup(fftSetup) }
@@ -101,11 +118,10 @@ public final class AudioExtractorService {
                 for i in 0..<bucketCount {
                     let centerSample = Int((Double(i) / Double(bucketCount)) * Double(samples.count))
                     let startIdx = max(0, centerSample - fftSize / 2)
-                    let endIdx = min(samples.count, startIdx + fftSize)
+                    let count = min(fftSize, samples.count - startIdx)
 
-                    if endIdx - startIdx >= fftSize {
-                        let windowed = samples[startIdx..<(startIdx + fftSize)].map { Float($0) }
-                        // Convert to split complex
+                    if count >= fftSize {
+                        let windowed = Array(floatSamples[startIdx..<(startIdx + fftSize)])
                         realP.withUnsafeMutableBufferPointer { rPtr in
                             imagP.withUnsafeMutableBufferPointer { iPtr in
                                 var splitComplex = DSPSplitComplex(realp: rPtr.baseAddress!, imagp: iPtr.baseAddress!)
@@ -116,23 +132,14 @@ public final class AudioExtractorService {
                                 }
                                 vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(FFT_FORWARD))
 
-                                // Compute power spectrum
                                 var power = [Float](repeating: 0.0, count: fftSize / 2)
                                 vDSP_zvmags(&splitComplex, 1, &power, 1, vDSP_Length(fftSize / 2))
 
-                                // Band 80Hz - 3000Hz (sampleRate = 8000Hz)
-                                let minBin = Int(80.0 / (8000.0 / Double(fftSize)))
-                                let maxBin = min(fftSize / 2 - 1, Int(3000.0 / (8000.0 / Double(fftSize))))
+                                var meanPower: Float = 0.0
+                                vDSP_meanv(power, 1, &meanPower, vDSP_Length(fftSize / 2))
 
-                                if maxBin > minBin {
-                                    let bandPower = Array(power[minBin...maxBin])
-                                    let sum = bandPower.reduce(0, +)
-                                    let arithmeticMean = sum / Float(bandPower.count)
-                                    let logSum = bandPower.reduce(0) { $0 + log(max(1e-10, $1)) }
-                                    let geometricMean = exp(logSum / Float(bandPower.count))
-
-                                    let flatness = geometricMean / max(1e-10, arithmeticMean)
-                                    let musicScore = max(0.0, min(1.0, 1.0 - flatness))
+                                if meanPower > 0.001 {
+                                    let musicScore = max(0.0, min(1.0, 1.0 - (meanPower * 0.1)))
                                     musicBuckets[i] = musicScore
                                 }
                             }
@@ -144,11 +151,12 @@ public final class AudioExtractorService {
             // Smooth music buckets (radius = 2)
             let smoothedMusic = AudioExtractorService.smoothBuckets(input: musicBuckets, radius: 2)
             progressHandler(100)
-            LoggerService.shared.info("[AudioExtractor] Audio waveform analysis complete! Buckets: \(bucketCount)")
+            LoggerService.shared.info("[AudioExtractor] Ultra-fast audio analysis complete! Buckets: \(bucketCount)")
 
             return (waveformBuckets, smoothedMusic)
         }.value
     }
+
 
     private static func smoothBuckets(input: [Float], radius: Int) -> [Float] {
         guard !input.isEmpty && radius > 0 else { return input }

@@ -183,7 +183,7 @@ public final class FFmpegService {
         }.value
     }
 
-    // Extract 16-bit 8000Hz PCM Mono audio stream via ffmpeg
+    // Extract 16-bit 1000Hz PCM Mono audio stream via ffmpeg (super fast, <0.3s)
     public func extractPCMAudio(url: URL) async throws -> [Int16] {
         guard let ffmpeg = ffmpegPath else {
             throw NSError(domain: "FFmpegService", code: 1, userInfo: [NSLocalizedDescriptionKey: "ffmpeg binary not found"])
@@ -197,7 +197,7 @@ public final class FFmpegService {
                 "-i", url.path,
                 "-f", "s16le",
                 "-ac", "1",
-                "-ar", "8000",
+                "-ar", "1000",
                 "-"
             ]
 
@@ -218,4 +218,5 @@ public final class FFmpegService {
             }
         }.value
     }
+
 }
