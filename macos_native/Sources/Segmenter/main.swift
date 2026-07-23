@@ -30,18 +30,19 @@ let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
 
-// Create a basic window shell to verify execution
+// Create native macOS window matching docs/screenshot.png layout
 let window = NSWindow(
-    contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
-    styleMask: [.titled, .closable, .miniaturizable, .resizable],
+    contentRect: NSRect(x: 0, y: 0, width: 1340, height: 840),
+    styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
     backing: .buffered,
     defer: false
 )
 window.title = "Segmenter (Native macOS)"
+window.titlebarAppearsTransparent = true
+window.titleVisibility = .hidden
 window.center()
-window.contentView = NSHostingView(rootView: Text("Segmenter Native macOS Engine Ready")
-    .font(.title)
-    .padding())
+window.contentView = NSHostingView(rootView: MainWindowView())
 window.makeKeyAndOrderFront(nil)
 
 app.run()
+
