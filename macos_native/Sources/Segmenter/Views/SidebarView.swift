@@ -20,6 +20,7 @@ public struct SidebarView: View {
     public var onLoadSegments: () -> Void
     public var onUploadAll: () -> Void
     public var onScanSeason: () -> Void
+    public var onJumpToSegment: (SegmentType) -> Void
     public var onClearDraft: (SegmentType) -> Void
 
     public init(
@@ -40,6 +41,7 @@ public struct SidebarView: View {
         onLoadSegments: @escaping () -> Void,
         onUploadAll: @escaping () -> Void,
         onScanSeason: @escaping () -> Void,
+        onJumpToSegment: @escaping (SegmentType) -> Void,
         onClearDraft: @escaping (SegmentType) -> Void
     ) {
         self._videoURL = videoURL
@@ -59,8 +61,10 @@ public struct SidebarView: View {
         self.onLoadSegments = onLoadSegments
         self.onUploadAll = onUploadAll
         self.onScanSeason = onScanSeason
+        self.onJumpToSegment = onJumpToSegment
         self.onClearDraft = onClearDraft
     }
+
 
     public var body: some View {
         ScrollView {
@@ -182,12 +186,22 @@ public struct SidebarView: View {
                                     .font(.system(size: 11, design: .monospaced))
                                     .foregroundColor(.secondary)
 
+                                Button(action: { onJumpToSegment(type) }) {
+                                    Image(systemName: "target")
+                                        .font(.caption)
+                                        .foregroundColor(draft.isEmpty ? .secondary : .blue)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(draft.isEmpty)
+                                .help("Jump playhead to segment start")
+
                                 Button(action: { onClearDraft(type) }) {
                                     Image(systemName: "trash")
                                         .font(.caption)
                                 }
                                 .buttonStyle(.plain)
                                 .disabled(draft.isEmpty)
+                                .help("Clear segment draft")
                             }
 
                             if type != SegmentType.allCases.last {
@@ -203,6 +217,7 @@ public struct SidebarView: View {
         .frame(width: 320)
         .background(Color(red: 0.11, green: 0.11, blue: 0.12))
     }
+
 
     private func formatDraftTime(_ draft: SegmentDraft) -> String {
         guard let start = draft.startMs, let end = draft.endMs else {

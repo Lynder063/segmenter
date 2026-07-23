@@ -46,6 +46,7 @@ public struct MainWindowView: View {
                 onLoadSegments: loadSegments,
                 onUploadAll: uploadAllDrafts,
                 onScanSeason: scanSeason,
+                onJumpToSegment: jumpToSegment,
                 onClearDraft: clearDraft
             )
 
@@ -154,7 +155,39 @@ public struct MainWindowView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .onAppear {
+            loadKeychainKeys()
+        }
     }
+
+    private func loadKeychainKeys() {
+        if let key = KeychainService.shared.loadKey(forAccount: "theintrodb_key") {
+            theIntroDBKey = key
+        }
+        if let key = KeychainService.shared.loadKey(forAccount: "introdb_key") {
+            introDBKey = key
+        }
+        if let key = KeychainService.shared.loadKey(forAccount: "tmdb_key") {
+            tmdbKey = key
+        }
+    }
+
+    private func saveKeys() {
+        _ = KeychainService.shared.saveKey(theIntroDBKey, forAccount: "theintrodb_key")
+        _ = KeychainService.shared.saveKey(introDBKey, forAccount: "introdb_key")
+        _ = KeychainService.shared.saveKey(tmdbKey, forAccount: "tmdb_key")
+
+        statusMessage = "API Keys saved securely to macOS Keychain"
+        LoggerService.shared.info("[UI] API keys saved to macOS Keychain")
+    }
+
+    private func jumpToSegment(_ type: SegmentType) {
+        if let draft = drafts[type], let start = draft.startMs {
+            self.currentPositionMs = start
+            self.statusMessage = "Jumped playhead to \(type.displayName) start (\(formatTimeMs(start)))"
+        }
+    }
+
 
     private func openVideoFileDialog() {
         let panel = NSOpenPanel()
@@ -227,14 +260,10 @@ public struct MainWindowView: View {
         currentPositionMs = max(0, currentPositionMs - stepMs)
     }
 
-    private func saveKeys() {
-        statusMessage = "Keys saved to local configuration"
-        LoggerService.shared.info("[UI] API keys saved")
-    }
-
     private func searchTMDB() {
         LoggerService.shared.info("[UI] Searching TMDB for: \(searchQuery)")
     }
+
 
     private func loadSegments() {
         LoggerService.shared.info("[UI] Loading segments...")
