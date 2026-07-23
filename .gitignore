@@ -57,3 +57,8 @@ windows/dist/
 *.suo
 test*.cs
 dotnet-install.ps1
+
+# Native Swift macOS
+macos_native/.build/
+macos/dist_native/
+macos/venv_mac/
