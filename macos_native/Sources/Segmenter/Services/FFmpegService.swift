@@ -11,8 +11,9 @@ public struct MediaMetadata {
 public final class FFmpegService {
     public static let shared = FFmpegService()
 
-    private var ffmpegPath: String?
-    private var ffprobePath: String?
+    public private(set) var ffmpegPath: String?
+    public private(set) var ffprobePath: String?
+
 
     private init() {
         resolveBinaries()

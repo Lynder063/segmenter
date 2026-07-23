@@ -31,27 +31,33 @@ public final class RCDEngineService {
                 debugLogger?(logLine)
             }
 
-            log("Initiating RCD season scan with method '\(method.rawValue)' in \(directoryURL.lastPathComponent)")
+            log("Initiating RCD season scan with method '\(method.rawValue)' in \(directoryURL.path)")
+            log("FFmpeg binary path: \(FFmpegService.shared.ffmpegPath ?? "NOT FOUND!")")
+            log("FFprobe binary path: \(FFmpegService.shared.ffprobePath ?? "NOT FOUND!")")
             log("Hardware Acceleration: Apple Silicon Accelerate vDSP SIMD Engine Active")
 
-
-
-
-        // 1. Collect video files in directory
-        let fileManager = FileManager.default
-        let keys: [URLResourceKey] = [.isRegularFileKey]
-        guard let enumerator = fileManager.enumerator(at: directoryURL, includingPropertiesForKeys: keys) else {
-            throw NSError(domain: "RCDEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to read season directory"])
-        }
-
-        var videoFiles: [URL] = []
-        let urls = enumerator.allObjects.compactMap { $0 as? URL }
-        for url in urls {
-            let ext = url.pathExtension.lowercased()
-            if ["mp4", "mkv", "avi", "mov", "webm", "m4v"].contains(ext) {
-                videoFiles.append(url)
+            // 1. Collect video files in directory
+            let fileManager = FileManager.default
+            let keys: [URLResourceKey] = [.isRegularFileKey]
+            guard let enumerator = fileManager.enumerator(at: directoryURL, includingPropertiesForKeys: keys) else {
+                let err = "Failed to enumerate season directory: \(directoryURL.path)"
+                log("ERROR: \(err)")
+                throw NSError(domain: "RCDEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: err])
             }
-        }
+
+            var videoFiles: [URL] = []
+            let urls = enumerator.allObjects.compactMap { $0 as? URL }
+            log("Found \(urls.count) total items in directory")
+
+            for url in urls {
+                let ext = url.pathExtension.lowercased()
+                if ["mp4", "mkv", "avi", "mov", "webm", "m4v"].contains(ext) {
+                    videoFiles.append(url)
+                }
+            }
+
+            log("Filtered \(videoFiles.count) video episode files (mp4, mkv, avi, mov, webm, m4v)")
+
 
         // Natural sort filenames (S01E01, S01E02...)
         videoFiles.sort { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }

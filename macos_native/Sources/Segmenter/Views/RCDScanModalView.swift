@@ -360,16 +360,24 @@ public struct RCDScanModalView: View {
         if directoryURL == nil {
             selectDirectory()
         }
-        guard let dirURL = directoryURL else { return }
+        guard let dirURL = directoryURL else {
+            statusText = "Error: No season directory selected"
+            debugLogs.append("[RCD Modal] Error: No season directory selected. Please click 'Browse Folder...'.")
+            return
+        }
 
         isScanning = true
         progressPct = 0
         statusText = "Initializing \(selectedMethod.rawValue)..."
         debugLogs.removeAll()
 
+        let timeStr = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        debugLogs.append("[\(timeStr)] [RCD Modal] Starting scan on directory: \(dirURL.path)")
+        debugLogs.append("[\(timeStr)] [RCD Modal] Selected Method: \(selectedMethod.rawValue)")
+        debugLogs.append("[\(timeStr)] [RCD Modal] Min Segment Length: \(Int(minSegmentLengthSec))s, Threshold: \(Int(similarityThreshold))%")
+
         Task.detached(priority: .userInitiated) {
             do {
-
                 let results = try await RCDEngineService.shared.scanSeason(
                     directoryURL: dirURL,
                     method: selectedMethod,
@@ -389,20 +397,22 @@ public struct RCDScanModalView: View {
                 )
 
                 await MainActor.run {
-
                     self.scanResults = results
                     self.isScanning = false
                     self.statusText = "Scan Complete! Detected sequences across \(results.count) episodes"
                     applyResultsToCurrentVideo()
                 }
             } catch {
+                let errStr = error.localizedDescription
                 await MainActor.run {
                     self.isScanning = false
-                    self.statusText = "Scan Error: \(error.localizedDescription)"
+                    self.statusText = "Scan Error: \(errStr)"
+                    self.debugLogs.append("[RCD Modal] EXCEPTION CATCH: \(errStr)")
                 }
             }
         }
     }
+
 
     private func applyResultsToCurrentVideo() {
         guard let currentName = currentVideoURL?.lastPathComponent,
