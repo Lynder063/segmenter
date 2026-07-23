@@ -161,33 +161,46 @@ public struct MainWindowView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+        panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie, .item]
 
-        if panel.runModal() == .OK, let url = panel.url {
-            self.videoURL = url
-            self.statusMessage = "Loaded \(url.lastPathComponent)"
-            LoggerService.shared.info("[UI] User opened video file: \(url.path)")
+        if panel.runModal() == .OK, let rawUrl = panel.url {
+            self.statusMessage = "Loading \(rawUrl.lastPathComponent)..."
+            LoggerService.shared.info("[UI] User opened video file: \(rawUrl.path)")
 
             // Auto-parse filename hints
-            let hint = FilenameMediaParser.parse(filePathOrName: url.path)
+            let hint = FilenameMediaParser.parse(filePathOrName: rawUrl.path)
             self.searchQuery = hint.title
             if let s = hint.season { self.season = String(s) }
             if let e = hint.episode { self.episode = String(e) }
             self.mediaType = hint.mediaTypeHint
 
-            // Extract audio waveform asynchronously
             Task {
-                try? await Task.sleep(nanoseconds: 500_000_000)
+                // 1. Inspect metadata via ffprobe/AVFoundation to resolve duration & framerate FIRST
+                if let meta = await FFmpegService.shared.inspectMedia(url: rawUrl) {
+                    await MainActor.run {
+                        self.durationMs = meta.durationMs
+                        self.frameRate = meta.frameRate
+                    }
+                }
+
+                // 2. Prepare playable URL (fast remux for MKV/x265 containers if needed)
+                let playableURL = await FFmpegService.shared.preparePlayableURL(url: rawUrl)
+                await MainActor.run {
+                    self.videoURL = playableURL
+                    self.statusMessage = "Loaded \(rawUrl.lastPathComponent)"
+                }
+
+                // 3. Extract audio waveform asynchronously
                 if let (buckets, music) = try? await AudioExtractorService.shared.extractAudioWaveform(
-                    videoURL: url,
-                    durationMs: self.durationMs,
+                    videoURL: rawUrl,
+                    durationMs: max(1000, self.durationMs),
                     progressHandler: { pct in
                         DispatchQueue.main.async {
                             self.statusMessage = "Analyzing audio... \(pct)%"
                         }
                     }
                 ) {
-                    DispatchQueue.main.async {
+                    await MainActor.run {
                         self.densityTrack = TimelineDensityTrack(
                             label: "Audio",
                             buckets: buckets,
@@ -232,8 +245,44 @@ public struct MainWindowView: View {
     }
 
     private func scanSeason() {
-        LoggerService.shared.info("[UI] Initiating season scan (RCD)...")
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Select Season Directory to Fingerprint (RCD)"
+
+        if panel.runModal() == .OK, let dirURL = panel.url {
+            LoggerService.shared.info("[UI] Initiating season scan (RCD) for directory: \(dirURL.path)")
+            self.statusMessage = "Starting season fingerprinting scan..."
+
+            Task {
+                do {
+                    let results = try await RCDEngineService.shared.scanSeason(directoryURL: dirURL) { statusMsg, pct in
+                        DispatchQueue.main.async {
+                            self.statusMessage = "\(statusMsg) (\(pct)%)"
+                        }
+                    }
+
+                    await MainActor.run {
+                        self.statusMessage = "Season scan complete! Found matches for \(results.count) episodes"
+
+                        // Apply detected timestamps to current draft if current video matches
+                        if let currentName = self.videoURL?.lastPathComponent,
+                           let matches = results[currentName], let first = matches.first {
+                            let startMs = Int(first.startSec * 1000.0)
+                            let endMs = Int(first.endSec * 1000.0)
+                            self.drafts[.intro] = SegmentDraft(startMs: startMs, endMs: endMs)
+                        }
+                    }
+                } catch {
+                    await MainActor.run {
+                        self.statusMessage = "Season scan error: \(error.localizedDescription)"
+                    }
+                }
+            }
+        }
     }
+
 
     private func clearDraft(_ type: SegmentType) {
         drafts[type] = .empty

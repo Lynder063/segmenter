@@ -19,40 +19,50 @@ public final class AudioExtractorService {
 
         // Run extraction on background queue
         return try await Task.detached(priority: .userInitiated) {
+            var samples: [Int16] = []
+
+            // Try AVAssetReader first
             let asset = AVAsset(url: videoURL)
-            guard let audioTrack = try await asset.loadTracks(withMediaType: .audio).first else {
-                throw NSError(domain: "AudioExtractor", code: 2, userInfo: [NSLocalizedDescriptionKey: "No audio track found in media file"])
+            if let audioTrack = try? await asset.loadTracks(withMediaType: .audio).first,
+               let reader = try? AVAssetReader(asset: asset) {
+
+                let outputSettings: [String: Any] = [
+                    AVFormatIDKey: kAudioFormatLinearPCM,
+                    AVLinearPCMBitDepthKey: 16,
+                    AVLinearPCMIsBigEndianKey: false,
+                    AVLinearPCMIsFloatKey: false,
+                    AVLinearPCMIsNonInterleaved: false,
+                    AVNumberOfChannelsKey: 1,
+                    AVSampleRateKey: 8000
+                ]
+
+                let trackOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
+                reader.add(trackOutput)
+                reader.startReading()
+
+                while let sampleBuffer = trackOutput.copyNextSampleBuffer() {
+                    if let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) {
+                        let length = CMBlockBufferGetDataLength(blockBuffer)
+                        var bufferSamples = [Int16](repeating: 0, count: length / 2)
+                        CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: &bufferSamples)
+                        samples.append(contentsOf: bufferSamples)
+                    }
+                }
             }
 
-            let reader = try AVAssetReader(asset: asset)
-            let outputSettings: [String: Any] = [
-                AVFormatIDKey: kAudioFormatLinearPCM,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsBigEndianKey: false,
-                AVLinearPCMIsFloatKey: false,
-                AVLinearPCMIsNonInterleaved: false,
-                AVNumberOfChannelsKey: 1,
-                AVSampleRateKey: 8000
-            ]
-
-            let trackOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
-            reader.add(trackOutput)
-            reader.startReading()
-
-            var samples: [Int16] = []
-            while let sampleBuffer = trackOutput.copyNextSampleBuffer() {
-                if let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) {
-                    let length = CMBlockBufferGetDataLength(blockBuffer)
-                    var bufferSamples = [Int16](repeating: 0, count: length / 2)
-                    CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: &bufferSamples)
-                    samples.append(contentsOf: bufferSamples)
+            // Fallback to bundled FFmpeg for MKV / AC3 / DTS / x265 audio streams
+            if samples.isEmpty {
+                LoggerService.shared.info("[AudioExtractor] AVAssetReader returned empty audio for \(videoURL.lastPathComponent). Falling back to FFmpeg PCM extraction...")
+                if let pcm = try? await FFmpegService.shared.extractPCMAudio(url: videoURL) {
+                    samples = pcm
                 }
             }
 
             progressHandler(50)
             guard !samples.isEmpty else {
-                throw NSError(domain: "AudioExtractor", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to read PCM audio data"])
+                throw NSError(domain: "AudioExtractor", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to read PCM audio data from media file"])
             }
+
 
             // 1. Calculate Peak Waveform Buckets using Accelerate
             let samplesPerBucket = max(1, samples.count / bucketCount)
