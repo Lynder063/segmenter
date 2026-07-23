@@ -297,6 +297,10 @@ public struct MainWindowView: View {
             if let e = hint.episode { self.episode = String(e) }
             self.mediaType = hint.mediaTypeHint
 
+            // Auto-load cached RCD segments if season autoscan was performed earlier
+            loadCachedRCDSegments(for: rawUrl)
+
+
             let initialDur = self.durationMs
 
             Task.detached(priority: .userInitiated) {
@@ -411,6 +415,24 @@ public struct MainWindowView: View {
         drafts[type] = .empty
     }
 
+    private func loadCachedRCDSegments(for url: URL) {
+        let filename = url.lastPathComponent
+        guard let matches = RCDCacheService.shared.getMatches(forFilename: filename) else { return }
+
+        var loadedCount = 0
+        for match in matches {
+            let startMs = Int(match.startSec * 1000.0)
+            let endMs = Int(match.endSec * 1000.0)
+            self.drafts[match.type] = SegmentDraft(startMs: startMs, endMs: endMs)
+            loadedCount += 1
+        }
+
+        if loadedCount > 0 {
+            self.statusMessage = "✨ Auto-loaded \(loadedCount) RCD segment(s) for episode!"
+            LoggerService.shared.info("[UI] Auto-applied \(loadedCount) RCD segments for \(filename)")
+        }
+    }
+
     private func formatTimeMs(_ ms: Int) -> String {
         let totalSec = ms / 1000
         let m = totalSec / 60
@@ -419,3 +441,4 @@ public struct MainWindowView: View {
         return String(format: "%02d:%02d.%03d", m, s, millis)
     }
 }
+

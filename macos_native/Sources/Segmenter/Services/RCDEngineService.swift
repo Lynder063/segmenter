@@ -2,12 +2,13 @@ import Foundation
 import AVFoundation
 import Accelerate
 
-public struct RCDMatch: Equatable {
+public struct RCDMatch: Codable, Equatable {
     public let type: SegmentType
     public let startSec: Double
     public let endSec: Double
     public let confidence: Float
 }
+
 
 public final class RCDEngineService {
     public static let shared = RCDEngineService()

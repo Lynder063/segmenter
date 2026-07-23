@@ -412,12 +412,15 @@ public struct RCDScanModalView: View {
                 )
 
                 print("🔴 [GUI TERMINAL LOG] RCDEngineService completed with \(results.count) results!")
+                RCDCacheService.shared.saveResults(results)
+
                 await MainActor.run {
                     self.scanResults = results
                     self.isScanning = false
-                    self.statusText = "Scan Complete! Detected sequences across \(results.count) episodes"
+                    self.statusText = "Scan Complete! Auto-saved detected segments for \(results.count) episodes"
                     applyResultsToCurrentVideo()
                 }
+
             } catch {
                 let errStr = error.localizedDescription
                 print("🔴 [GUI TERMINAL LOG] EXCEPTION THROWN: \(errStr)")
