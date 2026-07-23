@@ -61,8 +61,9 @@ public struct FrameStripView: View {
                                 )
 
                             Text(formatTimeMs(item.timeMs))
-                                .font(.system(size: 9, weight: .monospaced))
+                                .font(.system(size: 9, weight: .regular, design: .monospaced))
                                 .foregroundColor(textColor)
+
                         }
                     }
                 }
