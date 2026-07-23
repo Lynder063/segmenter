@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
-# Segmenter Native Swift macOS Build Script
+# Segmenter Native Swift Universal macOS Build Script
 # Compiles Universal Binary (arm64 Apple Silicon + x86_64 Intel)
-# Bundles static ffmpeg and ffprobe utilities for self-contained execution.
+# Bundles static ffmpeg/ffprobe and VLCKit.framework into App Bundle.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -11,6 +11,7 @@ SWIFT_DIR="$PROJECT_ROOT/macos_native"
 DIST_DIR="$SCRIPT_DIR/dist_native"
 APP_BUNDLE="$DIST_DIR/Segmenter.app"
 BIN_DIR="$APP_BUNDLE/Contents/Resources/bin"
+FRAMEWORKS_DIR="$APP_BUNDLE/Contents/Frameworks"
 
 echo "🍏 Building Native Swift Universal macOS App (arm64 + x86_64)..."
 echo "--------------------------------------------------------"
@@ -30,11 +31,24 @@ rm -rf "$DIST_DIR"
 mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 mkdir -p "$BIN_DIR"
+mkdir -p "$FRAMEWORKS_DIR"
 
 echo "🔀 Creating Universal Binary using lipo..."
 lipo -create -output "$APP_BUNDLE/Contents/MacOS/Segmenter" "$ARM64_BIN" "$X86_BIN"
 
 cp "$SCRIPT_DIR/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
+
+# Copy VLCKit.framework into App Bundle Frameworks directory
+echo "🎬 Bundling VLCKit.framework into App Bundle Frameworks..."
+VLC_FRAMEWORK="$SWIFT_DIR/.build/artifacts/vlckit-spm/VLCKit/VLCKit.xcframework/macos-arm64_x86_64/VLCKit.framework"
+if [ -d "$VLC_FRAMEWORK" ]; then
+    cp -R "$VLC_FRAMEWORK" "$FRAMEWORKS_DIR/"
+elif [ -d "$SWIFT_DIR/.build/arm64-apple-macosx/release/VLCKit.framework" ]; then
+    cp -R "$SWIFT_DIR/.build/arm64-apple-macosx/release/VLCKit.framework" "$FRAMEWORKS_DIR/"
+fi
+
+# Add @executable_path/../Frameworks rpath so dyld loads VLCKit.framework
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_BUNDLE/Contents/MacOS/Segmenter" 2>/dev/null || true
 
 # Bundle FFmpeg and FFprobe binaries if available in /tmp or system
 echo "📦 Bundling FFmpeg & FFprobe utilities into App Bundle..."
@@ -61,9 +75,9 @@ echo "🔍 Verifying Universal Binary Architectures:"
 file "$APP_BUNDLE/Contents/MacOS/Segmenter"
 lipo -info "$APP_BUNDLE/Contents/MacOS/Segmenter"
 
-if [ -f "$BIN_DIR/ffmpeg" ]; then
-    echo "🎥 Bundled FFmpeg version:"
-    "$BIN_DIR/ffmpeg" -version | head -n 1
+if [ -d "$FRAMEWORKS_DIR/VLCKit.framework" ]; then
+    echo "🎬 Bundled VLCKit Framework verified at:"
+    echo "   $FRAMEWORKS_DIR/VLCKit.framework"
 fi
 
 echo "--------------------------------------------------------"
