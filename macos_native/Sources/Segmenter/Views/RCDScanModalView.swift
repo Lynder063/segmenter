@@ -355,8 +355,9 @@ public struct RCDScanModalView: View {
         statusText = "Initializing \(selectedMethod.rawValue)..."
         debugLogs.removeAll()
 
-        Task {
+        Task.detached(priority: .userInitiated) {
             do {
+
                 let results = try await RCDEngineService.shared.scanSeason(
                     directoryURL: dirURL,
                     method: selectedMethod,

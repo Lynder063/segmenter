@@ -23,15 +23,17 @@ public final class RCDEngineService {
         debugLogger: ((String) -> Void)? = nil,
         progressHandler: @escaping (String, Int) -> Void
     ) async throws -> [String: [RCDMatch]] {
-        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        func log(_ msg: String) {
-            let logLine = "[\(timestamp)] \(msg)"
-            LoggerService.shared.info("[RCD Engine] \(msg)")
-            debugLogger?(logLine)
-        }
+        return try await Task.detached(priority: .userInitiated) {
+            let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+            func log(_ msg: String) {
+                let logLine = "[\(timestamp)] \(msg)"
+                LoggerService.shared.info("[RCD Engine] \(msg)")
+                debugLogger?(logLine)
+            }
 
-        log("Initiating RCD season scan with method '\(method.rawValue)' in \(directoryURL.lastPathComponent)")
-        log("Hardware Acceleration: Apple Silicon Accelerate vDSP SIMD Engine Active")
+            log("Initiating RCD season scan with method '\(method.rawValue)' in \(directoryURL.lastPathComponent)")
+            log("Hardware Acceleration: Apple Silicon Accelerate vDSP SIMD Engine Active")
+
 
 
 
@@ -69,15 +71,13 @@ public final class RCDEngineService {
             progressHandler("Extracting feature vector for \(video.lastPathComponent)...", pct)
             log("Extracting audio PCM feature vector (\(idx + 1)/\(videoFiles.count)): \(video.lastPathComponent)")
 
-            let buckets = await extractFastFeatureVector(url: video)
+            let buckets = await self.extractFastFeatureVector(url: video)
             log("Extracted \(buckets.count) feature buckets for \(video.lastPathComponent) (0.15s)")
             episodeFeatures[video.lastPathComponent] = (buckets, 1_800_000)
         }
 
         log("Executing SIMD vector cross-correlation via Accelerate vDSP_dotpr across episode matrices...")
         progressHandler("Cross-correlating episode fingerprints via Accelerate SIMD...", 65)
-
-
 
         // 3. Perform pairwise cross-correlation using Accelerate SIMD vDSP_dotpr
         var results: [String: [RCDMatch]] = [:]
@@ -106,7 +106,7 @@ public final class RCDEngineService {
 
                 for startIdx in stride(from: 0, to: maxIntroSearch - wLen, by: 4) { // step by 1 sec
                     let sliceA = Array(baseBuckets[startIdx..<(startIdx + wLen)])
-                    let normA = vectorNorm(sliceA)
+                    let normA = self.vectorNorm(sliceA)
                     guard normA > 0.01 else { continue }
 
                     var matchCount = 0
@@ -125,7 +125,7 @@ public final class RCDEngineService {
                             if searchEnd > searchStart {
                                 for targetIdx in stride(from: searchStart, to: searchEnd, by: 4) {
                                     let sliceB = Array(epBuckets[targetIdx..<(targetIdx + wLen)])
-                                    let normB = vectorNorm(sliceB)
+                                    let normB = self.vectorNorm(sliceB)
                                     if normB > 0.01 {
                                         var dot: Float = 0
                                         vDSP_dotpr(sliceA, 1, sliceB, 1, &dot, vDSP_Length(wLen))
@@ -155,7 +155,7 @@ public final class RCDEngineService {
                 if totalBuckets - minCreditsSearch <= wLen { continue }
                 for startIdx in stride(from: minCreditsSearch, to: max(minCreditsSearch + 1, totalBuckets - wLen), by: 8) {
                     let sliceA = Array(baseBuckets[startIdx..<(startIdx + wLen)])
-                    let normA = vectorNorm(sliceA)
+                    let normA = self.vectorNorm(sliceA)
                     guard normA > 0.01 else { continue }
 
                     var matchCount = 0
@@ -170,7 +170,8 @@ public final class RCDEngineService {
                             if epBuckets.count > wLen {
                                 for targetIdx in stride(from: epMinCredits, to: epBuckets.count - wLen, by: 8) {
                                     let sliceB = Array(epBuckets[targetIdx..<(targetIdx + wLen)])
-                                    let normB = vectorNorm(sliceB)
+                                    let normB = self.vectorNorm(sliceB)
+
                                     if normB > 0.01 {
                                         var dot: Float = 0
                                         vDSP_dotpr(sliceA, 1, sliceB, 1, &dot, vDSP_Length(wLen))
@@ -238,8 +239,9 @@ public final class RCDEngineService {
         log("Season scan complete across \(videoFiles.count) episodes!")
         progressHandler("RCD Season Fingerprinting Complete!", 100)
         return results
-
+        }.value
     }
+
 
     private func extractFastFeatureVector(url: URL) async -> [Float] {
         let pcmSamples = (try? await FFmpegService.shared.extractPCMAudioSnippet(url: url, durationSec: 900)) ?? []
