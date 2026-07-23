@@ -168,7 +168,6 @@ public struct SidebarView: View {
 
                         Button(action: {
                             isRCDModalPresented = true
-                            onScanSeason()
                         }) {
                             HStack {
                                 Image(systemName: "wand.and.stars")
@@ -176,6 +175,7 @@ public struct SidebarView: View {
                             }
                             .frame(maxWidth: .infinity)
                         }
+
                     }
                     .padding(6)
                 }

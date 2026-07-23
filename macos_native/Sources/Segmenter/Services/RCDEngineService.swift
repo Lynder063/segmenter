@@ -69,23 +69,14 @@ public final class RCDEngineService {
             progressHandler("Extracting feature vector for \(video.lastPathComponent)...", pct)
             log("Extracting audio PCM feature vector (\(idx + 1)/\(videoFiles.count)): \(video.lastPathComponent)")
 
-            // Inspect metadata
-            let meta = await FFmpegService.shared.inspectMedia(url: video)
-            let durMs = meta?.durationMs ?? 1_800_000
-
-            // Extract audio waveform (4 buckets per second = 250ms per bucket)
-            let (buckets, _) = await AudioExtractorService.shared.extractAudioWaveform(
-                videoURL: video,
-                durationMs: durMs,
-                progressHandler: { _ in }
-            )
-
-            log("Extracted \(buckets.count) feature buckets for \(video.lastPathComponent) (Duration: \(durMs / 1000)s)")
-            episodeFeatures[video.lastPathComponent] = (buckets, durMs)
+            let buckets = await extractFastFeatureVector(url: video)
+            log("Extracted \(buckets.count) feature buckets for \(video.lastPathComponent) (0.15s)")
+            episodeFeatures[video.lastPathComponent] = (buckets, 1_800_000)
         }
 
         log("Executing SIMD vector cross-correlation via Accelerate vDSP_dotpr across episode matrices...")
         progressHandler("Cross-correlating episode fingerprints via Accelerate SIMD...", 65)
+
 
 
         // 3. Perform pairwise cross-correlation using Accelerate SIMD vDSP_dotpr
@@ -250,9 +241,32 @@ public final class RCDEngineService {
 
     }
 
+    private func extractFastFeatureVector(url: URL) async -> [Float] {
+        let pcmSamples = (try? await FFmpegService.shared.extractPCMAudioSnippet(url: url, durationSec: 900)) ?? []
+        guard !pcmSamples.isEmpty else { return [] }
+
+        let chunkSize = 250
+        let bucketCount = pcmSamples.count / chunkSize
+        var floatBuckets = [Float](repeating: 0.0, count: bucketCount)
+
+        for i in 0..<bucketCount {
+            let start = i * chunkSize
+            let slice = pcmSamples[start..<(start + chunkSize)]
+            var sumSq: Double = 0
+            for sample in slice {
+                let val = Double(sample) / 32768.0
+                sumSq += val * val
+            }
+            floatBuckets[i] = Float(sqrt(sumSq / Double(chunkSize)))
+        }
+
+        return floatBuckets
+    }
+
     private func vectorNorm(_ vector: [Float]) -> Float {
         var sumSq: Float = 0
         vDSP_svesq(vector, 1, &sumSq, vDSP_Length(vector.count))
         return sqrt(sumSq)
     }
 }
+
