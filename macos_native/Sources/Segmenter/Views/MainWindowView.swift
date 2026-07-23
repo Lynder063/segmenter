@@ -48,6 +48,8 @@ public struct MainWindowView: View {
                 onLoadSegments: loadSegments,
                 onUploadAll: uploadAllDrafts,
                 onScanSeason: scanSeason,
+                onSetSegmentStart: setSegmentStart,
+                onSetSegmentEnd: setSegmentEnd,
                 onJumpToSegment: jumpToSegment,
                 onClearDraft: clearDraft
             )
@@ -55,7 +57,6 @@ public struct MainWindowView: View {
             .layoutPriority(1)
 
             Divider()
-
 
             // Right Main Viewport
             VStack(spacing: 0) {
@@ -87,7 +88,6 @@ public struct MainWindowView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-
 
                 // Playback Control Bar
                 HStack(spacing: 12) {
@@ -128,7 +128,10 @@ public struct MainWindowView: View {
                     videoURL: videoURL,
                     currentPositionMs: currentPositionMs,
                     durationMs: durationMs,
-                    frameRate: frameRate
+                    frameRate: frameRate,
+                    onSeek: { targetMs in
+                        self.currentPositionMs = targetMs
+                    }
                 )
 
                 Divider()
@@ -163,10 +166,76 @@ public struct MainWindowView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             loadKeychainKeys()
+            setupKeyboardMonitor()
         }
     }
 
+    private func setSegmentStart(for type: SegmentType) {
+        var draft = drafts[type] ?? SegmentDraft()
+        draft.startMs = currentPositionMs
+        drafts[type] = draft
+        statusMessage = "Set \(type.displayName) start: \(formatTimeMs(currentPositionMs))"
+    }
+
+    private func setSegmentEnd(for type: SegmentType) {
+        var draft = drafts[type] ?? SegmentDraft()
+        draft.endMs = currentPositionMs
+        drafts[type] = draft
+        statusMessage = "Set \(type.displayName) end: \(formatTimeMs(currentPositionMs))"
+    }
+
+    private func setupKeyboardMonitor() {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if let firstResponder = NSApp.keyWindow?.firstResponder,
+               firstResponder is NSTextView || firstResponder is NSTextField {
+                return event
+            }
+
+            let isShift = event.modifierFlags.contains(.shift)
+            let char = event.charactersIgnoringModifiers?.lowercased() ?? ""
+
+            switch event.keyCode {
+            case 49: // Space
+                togglePlay()
+                return nil
+            case 123: // Left Arrow
+                stepBackward()
+                return nil
+            case 124: // Right Arrow
+                stepForward()
+                return nil
+            default:
+                break
+            }
+
+            switch char {
+            case "i":
+                if isShift { setSegmentEnd(for: .intro) } else { setSegmentStart(for: .intro) }
+                return nil
+            case "r":
+                if isShift { setSegmentEnd(for: .recap) } else { setSegmentStart(for: .recap) }
+                return nil
+            case "c":
+                if isShift { setSegmentEnd(for: .credits) } else { setSegmentStart(for: .credits) }
+                return nil
+            case "p":
+                if isShift { setSegmentEnd(for: .preview) } else { setSegmentStart(for: .preview) }
+                return nil
+            case ",":
+                stepBackward()
+                return nil
+            case ".":
+                stepForward()
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+
+
     private func loadKeychainKeys() {
+
         if let key = KeychainService.shared.loadKey(forAccount: "theintrodb_key") {
             theIntroDBKey = key
         }

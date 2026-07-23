@@ -5,9 +5,9 @@ import AppKit
 public struct ThumbnailItem: Identifiable {
     public var id: Int { timeMs }
     public let timeMs: Int
-    public let image: NSImage
+    public let image: NSImage?
 
-    public init(timeMs: Int, image: NSImage) {
+    public init(timeMs: Int, image: NSImage? = nil) {
         self.timeMs = timeMs
         self.image = image
     }
@@ -18,15 +18,24 @@ public struct FrameStripView: View {
     public var currentPositionMs: Int
     public var durationMs: Int
     public var frameRate: Double
+    public var onSeek: ((Int) -> Void)?
 
     @State private var thumbnails: [ThumbnailItem] = []
+    @State private var thumbnailCache: [Int: NSImage] = [:]
     @State private var isGenerating = false
 
-    public init(videoURL: URL?, currentPositionMs: Int, durationMs: Int, frameRate: Double) {
+    public init(
+        videoURL: URL?,
+        currentPositionMs: Int,
+        durationMs: Int,
+        frameRate: Double,
+        onSeek: ((Int) -> Void)? = nil
+    ) {
         self.videoURL = videoURL
         self.currentPositionMs = currentPositionMs
         self.durationMs = durationMs
         self.frameRate = frameRate
+        self.onSeek = onSeek
     }
 
     public var body: some View {
@@ -36,7 +45,7 @@ public struct FrameStripView: View {
                     .font(.caption)
                     .fontWeight(.bold)
                     .foregroundColor(.secondary)
-                Text("step = 250 ms, fps \(String(format: "%.2f", frameRate))")
+                Text("step = 250 ms, fps \(String(format: "%.2f", frameRate > 0 ? frameRate : 23.98))")
                     .font(.caption2)
                     .foregroundColor(.secondary.opacity(0.7))
             }
@@ -44,15 +53,26 @@ public struct FrameStripView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(Array(thumbnails.enumerated()), id: \.element.id) { _, item in
+                    ForEach(thumbnails) { item in
                         let isCurrent = isCurrentFrame(item.timeMs)
                         let borderColor = isCurrent ? Color(red: 0.0, green: 0.48, blue: 1.0) : Color.clear
                         let textColor = isCurrent ? Color.blue : Color.gray
 
-                        VStack(spacing: 2) {
-                            Image(nsImage: item.image)
-                                .resizable()
-                                .aspectRatio(16/9, contentMode: .fit)
+                        Button(action: { onSeek?(item.timeMs) }) {
+                            VStack(spacing: 2) {
+                                Group {
+                                    if let img = item.image ?? thumbnailCache[item.timeMs] {
+                                        Image(nsImage: img)
+                                            .resizable()
+                                            .aspectRatio(16/9, contentMode: .fill)
+                                    } else {
+                                        Color(red: 0.15, green: 0.15, blue: 0.18)
+                                            .overlay(
+                                                Image(systemName: "photo")
+                                                    .foregroundColor(.gray.opacity(0.5))
+                                            )
+                                    }
+                                }
                                 .frame(width: 80, height: 45)
                                 .cornerRadius(3)
                                 .overlay(
@@ -60,11 +80,12 @@ public struct FrameStripView: View {
                                         .stroke(borderColor, lineWidth: 2)
                                 )
 
-                            Text(formatTimeMs(item.timeMs))
-                                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                                .foregroundColor(textColor)
-
+                                Text(formatTimeMs(item.timeMs))
+                                    .font(.system(size: 9, weight: .regular, design: .monospaced))
+                                    .foregroundColor(textColor)
+                            }
                         }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, 8)
@@ -79,6 +100,7 @@ public struct FrameStripView: View {
             generateThumbnailsIfNeeded(centerMs: newPos)
         }
         .onChange(of: videoURL) { _ in
+            thumbnailCache.removeAll()
             thumbnails.removeAll()
             generateThumbnailsIfNeeded(centerMs: currentPositionMs)
         }
@@ -87,7 +109,6 @@ public struct FrameStripView: View {
     private func isCurrentFrame(_ timeMs: Int) -> Bool {
         abs(timeMs - currentPositionMs) < 150
     }
-
 
     private func formatTimeMs(_ ms: Int) -> String {
         let sec = ms / 1000
@@ -98,19 +119,21 @@ public struct FrameStripView: View {
     }
 
     private func generateThumbnailsIfNeeded(centerMs: Int) {
-        guard let url = videoURL, !isGenerating else { return }
+        guard let url = videoURL else { return }
 
         // Generate 13 frames around centerMs with 250ms step
         let count = 13
         let stepMs = 250
         let half = count / 2
-        let targetTimes = (-half...half).map { max(0, min(durationMs, centerMs + $0 * stepMs)) }
+        let targetTimes = (-half...half).map { max(0, min(durationMs > 0 ? durationMs : centerMs + 3000, centerMs + $0 * stepMs)) }
 
-        // Skip if already matching current range
-        if let first = thumbnails.first?.timeMs, let last = thumbnails.last?.timeMs,
-           first == targetTimes.first && last == targetTimes.last {
-            return
-        }
+        // Update placeholder items immediately so labels display 01:54.500
+        let currentItems = targetTimes.map { ThumbnailItem(timeMs: $0, image: thumbnailCache[$0]) }
+        self.thumbnails = currentItems
+
+        // Filter missing times that are not in cache
+        let missingTimes = targetTimes.filter { thumbnailCache[$0] == nil }
+        guard !missingTimes.isEmpty && !isGenerating else { return }
 
         isGenerating = true
         Task.detached(priority: .userInitiated) {
@@ -121,23 +144,36 @@ public struct FrameStripView: View {
             generator.requestedTimeToleranceBefore = CMTime(value: 500, timescale: 1000)
             generator.requestedTimeToleranceAfter = CMTime(value: 500, timescale: 1000)
 
-            var newThumbs: [ThumbnailItem] = []
-            for timeMs in targetTimes {
-                let cmTime = CMTime(value: CMTimeValue(timeMs), timescale: 1000)
-                if let cgImage = try? generator.copyCGImage(at: cmTime, actualTime: nil) {
-                    let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: 80, height: 45))
-                    newThumbs.append(ThumbnailItem(timeMs: timeMs, image: nsImage))
-                } else if let ffImg = await FFmpegService.shared.extractThumbnail(url: url, timeMs: timeMs) {
-                    newThumbs.append(ThumbnailItem(timeMs: timeMs, image: ffImg))
+            await withTaskGroup(of: (Int, Data?).self) { group in
+                for timeMs in missingTimes {
+                    group.addTask {
+                        let cmTime = CMTime(value: CMTimeValue(timeMs), timescale: 1000)
+                        if let cgImage = try? generator.copyCGImage(at: cmTime, actualTime: nil) {
+                            let rep = NSBitmapImageRep(cgImage: cgImage)
+                            let data = rep.representation(using: .jpeg, properties: [:])
+                            return (timeMs, data)
+                        } else if let ffImg = await FFmpegService.shared.extractThumbnail(url: url, timeMs: timeMs) {
+                            let data = ffImg.tiffRepresentation
+                            return (timeMs, data)
+                        }
+                        return (timeMs, nil)
+                    }
+                }
+
+                for await (tMs, dataOpt) in group {
+                    if let data = dataOpt, let img = NSImage(data: data) {
+                        await MainActor.run {
+                            self.thumbnailCache[tMs] = img
+                        }
+                    }
                 }
             }
 
-            let resultThumbs = newThumbs
+
             await MainActor.run {
-                self.thumbnails = resultThumbs
+                self.thumbnails = targetTimes.map { ThumbnailItem(timeMs: $0, image: self.thumbnailCache[$0]) }
                 self.isGenerating = false
             }
         }
     }
 }
-
