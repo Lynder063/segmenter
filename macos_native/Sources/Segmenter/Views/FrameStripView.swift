@@ -45,22 +45,24 @@ public struct FrameStripView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(Array(thumbnails.enumerated()), id: \.element.id) { _, item in
+                        let isCurrent = isCurrentFrame(item.timeMs)
+                        let borderColor = isCurrent ? Color(red: 0.0, green: 0.48, blue: 1.0) : Color.clear
+                        let textColor = isCurrent ? Color.blue : Color.gray
+
                         VStack(spacing: 2) {
                             Image(nsImage: item.image)
-
-
                                 .resizable()
                                 .aspectRatio(16/9, contentMode: .fit)
                                 .frame(width: 80, height: 45)
                                 .cornerRadius(3)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 3)
-                                        .stroke(isCurrentFrame(item.timeMs) ? Color(red: 0.0, green: 0.48, blue: 1.0) : Color.clear, lineWidth: 2)
+                                        .stroke(borderColor, lineWidth: 2)
                                 )
 
                             Text(formatTimeMs(item.timeMs))
                                 .font(.system(size: 9, weight: .monospaced))
-                                .foregroundColor(isCurrentFrame(item.timeMs) ? .blue : .gray)
+                                .foregroundColor(textColor)
                         }
                     }
                 }
