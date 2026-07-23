@@ -47,6 +47,8 @@ public struct RCDScanModalView: View {
     @State private var statusText: String = "Select a season folder to begin scan"
 
     @State private var scanResults: [String: [RCDMatch]] = [:]
+    @State private var debugLogs: [String] = []
+
 
     public init(
         isPresented: Binding<Bool>,
@@ -206,7 +208,60 @@ public struct RCDScanModalView: View {
                         .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.08)))
                     }
 
+                    // Debug Console Box
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Image(systemName: "terminal.fill")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("Real-Time HW Diagnostic Log")
+                                .font(.caption)
+                                .bold()
+                            Spacer()
+                            if !debugLogs.isEmpty {
+                                Button("Clear Logs") {
+                                    debugLogs.removeAll()
+                                }
+                                .font(.caption2)
+                                .buttonStyle(.plain)
+                                .foregroundColor(.secondary)
+                            }
+                        }
+
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    if debugLogs.isEmpty {
+                                        Text("Waiting for scan to start...")
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundColor(.gray)
+                                    } else {
+                                        ForEach(Array(debugLogs.enumerated()), id: \.offset) { idx, line in
+                                            Text(line)
+                                                .font(.system(size: 11, design: .monospaced))
+                                                .foregroundColor(line.contains("Match Found") ? .green : (line.contains("Error") ? .red : .secondary))
+                                                .id(idx)
+                                        }
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(8)
+                            }
+                            .frame(height: 120)
+                            .background(Color.black.opacity(0.90))
+                            .cornerRadius(6)
+                            .onChange(of: debugLogs.count) { _ in
+                                if let lastIdx = debugLogs.indices.last {
+                                    withAnimation {
+                                        proxy.scrollTo(lastIdx, anchor: .bottom)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Results Table
+
                     if !scanResults.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Detected Season Sequences (\(scanResults.count) Episodes)").font(.subheadline).bold()
@@ -298,6 +353,7 @@ public struct RCDScanModalView: View {
         isScanning = true
         progressPct = 0
         statusText = "Initializing \(selectedMethod.rawValue)..."
+        debugLogs.removeAll()
 
         Task {
             do {
@@ -306,6 +362,11 @@ public struct RCDScanModalView: View {
                     method: selectedMethod,
                     minSegmentLengthSec: minSegmentLengthSec,
                     similarityThreshold: similarityThreshold / 100.0,
+                    debugLogger: { line in
+                        DispatchQueue.main.async {
+                            self.debugLogs.append(line)
+                        }
+                    },
                     progressHandler: { text, pct in
                         DispatchQueue.main.async {
                             self.statusText = text
@@ -315,6 +376,7 @@ public struct RCDScanModalView: View {
                 )
 
                 await MainActor.run {
+
                     self.scanResults = results
                     self.isScanning = false
                     self.statusText = "Scan Complete! Detected sequences across \(results.count) episodes"

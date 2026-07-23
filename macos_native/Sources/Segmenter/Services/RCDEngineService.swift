@@ -20,9 +20,19 @@ public final class RCDEngineService {
         method: RCDDetectionMethod = .appleHWAccelerated,
         minSegmentLengthSec: Double = 45.0,
         similarityThreshold: Double = 0.80,
+        debugLogger: ((String) -> Void)? = nil,
         progressHandler: @escaping (String, Int) -> Void
     ) async throws -> [String: [RCDMatch]] {
-        LoggerService.shared.info("[RCD Engine] Initiating RCD season scan with method '\(method.rawValue)' (HW: Apple Accelerate vDSP SIMD) in: \(directoryURL.path)")
+        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        func log(_ msg: String) {
+            let logLine = "[\(timestamp)] \(msg)"
+            LoggerService.shared.info("[RCD Engine] \(msg)")
+            debugLogger?(logLine)
+        }
+
+        log("Initiating RCD season scan with method '\(method.rawValue)' in \(directoryURL.lastPathComponent)")
+        log("Hardware Acceleration: Apple Silicon Accelerate vDSP SIMD Engine Active")
+
 
 
         // 1. Collect video files in directory
@@ -48,7 +58,7 @@ public final class RCDEngineService {
             throw NSError(domain: "RCDEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: "Season scan requires at least 2 episode videos"])
         }
 
-        LoggerService.shared.info("[RCD Engine] Found \(videoFiles.count) episode files for RCD cross-correlation")
+        log("Found \(videoFiles.count) episode files in directory for RCD cross-correlation")
         progressHandler("Preparing audio feature vectors...", 5)
 
         // 2. Extract audio feature vectors for each episode (first 15 min & last 10 min)
@@ -57,6 +67,7 @@ public final class RCDEngineService {
         for (idx, video) in videoFiles.enumerated() {
             let pct = 5 + Int((Double(idx + 1) / Double(videoFiles.count)) * 50.0)
             progressHandler("Extracting feature vector for \(video.lastPathComponent)...", pct)
+            log("Extracting audio PCM feature vector (\(idx + 1)/\(videoFiles.count)): \(video.lastPathComponent)")
 
             // Inspect metadata
             let meta = await FFmpegService.shared.inspectMedia(url: video)
@@ -69,10 +80,13 @@ public final class RCDEngineService {
                 progressHandler: { _ in }
             )
 
+            log("Extracted \(buckets.count) feature buckets for \(video.lastPathComponent) (Duration: \(durMs / 1000)s)")
             episodeFeatures[video.lastPathComponent] = (buckets, durMs)
         }
 
+        log("Executing SIMD vector cross-correlation via Accelerate vDSP_dotpr across episode matrices...")
         progressHandler("Cross-correlating episode fingerprints via Accelerate SIMD...", 65)
+
 
         // 3. Perform pairwise cross-correlation using Accelerate SIMD vDSP_dotpr
         var results: [String: [RCDMatch]] = [:]
@@ -196,6 +210,18 @@ public final class RCDEngineService {
         let bestIntro = candidateIntroMatches.max(by: { $0.score < $1.score })
         let bestCredits = candidateCreditsMatches.max(by: { $0.score < $1.score })
 
+        if let intro = bestIntro {
+            let startSec = Double(intro.startBucket) * 0.25
+            let endSec = Double(intro.endBucket) * 0.25
+            log(String(format: "RCD Match Found [INTRO]: %02d:%02d - %02d:%02d (Confidence: %.1f%%)", Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, intro.score * 100.0))
+        }
+
+        if let credits = bestCredits {
+            let startSec = Double(credits.startBucket) * 0.25
+            let endSec = Double(credits.endBucket) * 0.25
+            log(String(format: "RCD Match Found [CREDITS]: %02d:%02d - %02d:%02d (Confidence: %.1f%%)", Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, credits.score * 100.0))
+        }
+
         for video in videoFiles {
             let epName = video.lastPathComponent
             var matches: [RCDMatch] = []
@@ -218,9 +244,10 @@ public final class RCDEngineService {
             results[epName] = matches
         }
 
+        log("Season scan complete across \(videoFiles.count) episodes!")
         progressHandler("RCD Season Fingerprinting Complete!", 100)
-        LoggerService.shared.info("[RCD Engine] Successfully detected RCD repeated sequences across \(videoFiles.count) episodes!")
         return results
+
     }
 
     private func vectorNorm(_ vector: [Float]) -> Float {
