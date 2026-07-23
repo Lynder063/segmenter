@@ -14,6 +14,9 @@ public struct SidebarView: View {
     @Binding public var episode: String
     @Binding public var drafts: [SegmentType: SegmentDraft]
 
+    @State private var isRCDModalPresented = false
+
+
     public var onOpenVideo: () -> Void
     public var onSaveKeys: () -> Void
     public var onSearchTMDB: () -> Void
@@ -163,13 +166,20 @@ public struct SidebarView: View {
                             .tint(Color(red: 0.0, green: 0.48, blue: 1.0))
                         }
 
-                        Button(action: onScanSeason) {
-                            Text("Scan Season (Fingerprint)")
-                                .frame(maxWidth: .infinity)
+                        Button(action: {
+                            isRCDModalPresented = true
+                            onScanSeason()
+                        }) {
+                            HStack {
+                                Image(systemName: "wand.and.stars")
+                                Text("Scan Season (RCD Autoscan)")
+                            }
+                            .frame(maxWidth: .infinity)
                         }
                     }
                     .padding(6)
                 }
+
 
                 // Section 4: Segment Drafts (Matching docs/screenshot.png)
                 GroupBox(label: Text("Segment Drafts").fontWeight(.bold)) {
@@ -250,7 +260,15 @@ public struct SidebarView: View {
         }
         .frame(width: 320)
         .background(Color(red: 0.11, green: 0.11, blue: 0.12))
+        .sheet(isPresented: $isRCDModalPresented) {
+            RCDScanModalView(
+                isPresented: $isRCDModalPresented,
+                currentVideoURL: $videoURL,
+                drafts: $drafts
+            )
+        }
     }
+
 
     private func formatDraftTime(_ draft: SegmentDraft) -> String {
         guard let start = draft.startMs, let end = draft.endMs else {

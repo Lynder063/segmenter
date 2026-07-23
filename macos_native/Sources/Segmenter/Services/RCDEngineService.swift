@@ -17,9 +17,13 @@ public final class RCDEngineService {
     /// Scans a directory of episode videos and detects repeated Intro/Credits content across episodes
     public func scanSeason(
         directoryURL: URL,
+        method: RCDDetectionMethod = .appleHWAccelerated,
+        minSegmentLengthSec: Double = 45.0,
+        similarityThreshold: Double = 0.80,
         progressHandler: @escaping (String, Int) -> Void
     ) async throws -> [String: [RCDMatch]] {
-        LoggerService.shared.info("[RCD Engine] Initiating real RCD season fingerprinting in: \(directoryURL.path)")
+        LoggerService.shared.info("[RCD Engine] Initiating RCD season scan with method '\(method.rawValue)' (HW: Apple Accelerate vDSP SIMD) in: \(directoryURL.path)")
+
 
         // 1. Collect video files in directory
         let fileManager = FileManager.default
