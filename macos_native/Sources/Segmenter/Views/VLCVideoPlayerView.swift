@@ -123,13 +123,15 @@ public struct VLCVideoPlayerView: NSViewRepresentable {
             }
         }
 
-        public func mediaPlayerStateChanged(_ notification: Notification) {
+        public func mediaPlayerStateChanged(_ newState: VLCMediaPlayerState) {
             guard let player = mediaPlayer else { return }
-            if player.state == .ended {
+            if player.state == newState, "\(newState)".lowercased().contains("ended") {
                 DispatchQueue.main.async {
                     self.parent.isPlaying = false
                 }
             }
         }
+
+
     }
 }

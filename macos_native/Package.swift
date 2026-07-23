@@ -19,11 +19,12 @@ let package = Package(
         .executableTarget(
             name: "Segmenter",
             dependencies: [
-                .product(name: "VLCKit", package: "vlckit-spm")
+                .product(name: "VLCKitSPM", package: "vlckit-spm")
             ],
             path: "Sources/Segmenter",
             resources: []
         )
     ]
 )
+
 

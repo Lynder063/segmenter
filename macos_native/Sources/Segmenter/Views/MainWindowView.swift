@@ -219,10 +219,12 @@ public struct MainWindowView: View {
             if let e = hint.episode { self.episode = String(e) }
             self.mediaType = hint.mediaTypeHint
 
+            let initialDur = self.durationMs
+
             Task.detached(priority: .userInitiated) {
                 // 1. Inspect metadata via ffprobe/AVFoundation in background
-                let initialDur = self.durationMs
                 var currentDurMs = initialDur
+
 
                 if let meta = await FFmpegService.shared.inspectMedia(url: rawUrl) {
                     if meta.durationMs > 0 { currentDurMs = meta.durationMs }
