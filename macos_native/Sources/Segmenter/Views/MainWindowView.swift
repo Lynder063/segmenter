@@ -222,10 +222,8 @@ public struct MainWindowView: View {
             let initialDur = self.durationMs
 
             Task.detached(priority: .userInitiated) {
-                // 1. Inspect metadata via ffprobe/AVFoundation in background
+                // 1. Inspect metadata via ffprobe/AVFoundation in background thread
                 var currentDurMs = initialDur
-
-
                 if let meta = await FFmpegService.shared.inspectMedia(url: rawUrl) {
                     if meta.durationMs > 0 { currentDurMs = meta.durationMs }
                     await MainActor.run {
@@ -235,28 +233,28 @@ public struct MainWindowView: View {
                 }
 
                 // 2. Extract audio waveform in background thread (<0.3s)
-                let targetDuration = currentDurMs > 0 ? currentDurMs : 1800_000
-                if let (buckets, music) = try? await AudioExtractorService.shared.extractAudioWaveform(
+                let (buckets, music) = await AudioExtractorService.shared.extractAudioWaveform(
                     videoURL: rawUrl,
-                    durationMs: targetDuration,
+                    durationMs: currentDurMs,
                     progressHandler: { pct in
                         DispatchQueue.main.async {
                             self.statusMessage = "Analyzing audio... \(pct)%"
                         }
                     }
-                ) {
-                    await MainActor.run {
-                        self.densityTrack = TimelineDensityTrack(
-                            label: "Audio",
-                            buckets: buckets,
-                            musicLikelihoodBuckets: music
-                        )
-                        self.statusMessage = "Audio analysis complete"
-                    }
+                )
+
+                await MainActor.run {
+                    self.densityTrack = TimelineDensityTrack(
+                        label: "Audio",
+                        buckets: buckets,
+                        musicLikelihoodBuckets: music
+                    )
+                    self.statusMessage = "Audio analysis complete"
                 }
             }
         }
     }
+
 
 
 

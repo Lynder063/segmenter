@@ -118,30 +118,40 @@ public class TimelineCanvasNSView: NSView {
             ctx.addLine(to: CGPoint(x: bounds.width, y: y + trackHeight))
             ctx.strokePath()
 
-            // Draw Audio Waveform
-            if i == 0 && !densityTrack.buckets.isEmpty {
-                let count = densityTrack.buckets.count
-                let stepX = timelineWidth / CGFloat(count)
-                for b in 0..<count {
-                    let amp = CGFloat(densityTrack.buckets[b])
-                    let barH = amp * (trackHeight - 4)
-                    let barX = sidebarWidth + CGFloat(b) * stepX
-                    let barY = y + (trackHeight - barH) / 2.0
+            // Draw Audio Waveform Track
+            if i == 0 {
+                let trackY = y + trackHeight / 2.0
+                ctx.setStrokeColor(NSColor(red: 0.25, green: 0.25, blue: 0.28, alpha: 0.6).cgColor)
+                ctx.setLineWidth(1.0)
+                ctx.move(to: CGPoint(x: sidebarWidth, y: trackY))
+                ctx.addLine(to: CGPoint(x: bounds.width, y: trackY))
+                ctx.strokePath()
 
-                    // Color code music likelihood (orange for music, mint/blue for speech)
-                    var barColor = NSColor(red: 0.0, green: 0.78, blue: 0.65, alpha: 0.85) // Mint
-                    if let music = densityTrack.musicLikelihoodBuckets, b < music.count {
-                        let m = CGFloat(music[b])
-                        if m > 0.4 {
-                            barColor = NSColor(red: 1.0, green: 0.58, blue: 0.0, alpha: 0.85) // Orange music
+                if !densityTrack.buckets.isEmpty {
+                    let count = densityTrack.buckets.count
+                    let stepX = timelineWidth / CGFloat(count)
+                    for b in 0..<count {
+                        let amp = CGFloat(densityTrack.buckets[b])
+                        let barH = max(2.0, amp * (trackHeight - 6))
+                        let barX = sidebarWidth + CGFloat(b) * stepX
+                        let barY = y + (trackHeight - barH) / 2.0
+
+                        // Color code music likelihood (orange for music, mint/blue for speech)
+                        var barColor = NSColor(red: 0.0, green: 0.78, blue: 0.65, alpha: 0.85) // Mint
+                        if let music = densityTrack.musicLikelihoodBuckets, b < music.count {
+                            let m = CGFloat(music[b])
+                            if m > 0.4 {
+                                barColor = NSColor(red: 1.0, green: 0.58, blue: 0.0, alpha: 0.85) // Orange music
+                            }
                         }
-                    }
 
-                    let barRect = CGRect(x: barX, y: barY, width: max(1.0, stepX - 0.5), height: barH)
-                    ctx.setFillColor(barColor.cgColor)
-                    ctx.fill(barRect)
+                        let barRect = CGRect(x: barX, y: barY, width: max(1.0, stepX - 0.5), height: barH)
+                        ctx.setFillColor(barColor.cgColor)
+                        ctx.fill(barRect)
+                    }
                 }
             }
+
 
             // Draw Segment Draft Bars
             if let type = track.type, let draft = drafts[type], let startMs = draft.startMs {

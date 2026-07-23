@@ -12,21 +12,24 @@ public final class AudioExtractorService {
         videoURL: URL,
         durationMs: Int,
         progressHandler: @escaping (Int) -> Void
-    ) async throws -> (buckets: [Float], musicLikelihood: [Float]) {
-        LoggerService.shared.info("[AudioExtractor] Starting IntroStamp audio engine for: \(videoURL.lastPathComponent) (\(durationMs)ms)")
-
-        guard durationMs > 0 else {
-            throw NSError(domain: "AudioExtractor", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid video duration"])
+    ) async -> (buckets: [Float], musicLikelihood: [Float]) {
+        var effectiveDurationMs = durationMs
+        if effectiveDurationMs <= 0 {
+            if let meta = await FFmpegService.shared.inspectMedia(url: videoURL), meta.durationMs > 0 {
+                effectiveDurationMs = meta.durationMs
+            } else {
+                effectiveDurationMs = 1_800_000 // 30 min default fallback
+            }
         }
 
-        let bucketCount = max(120, min(2400, durationMs / 250))
+        LoggerService.shared.info("[AudioExtractor] Starting IntroStamp audio engine for: \(videoURL.lastPathComponent) (\(effectiveDurationMs)ms)")
+        let bucketCount = max(200, min(2400, effectiveDurationMs / 250))
         progressHandler(10)
 
         return await Task.detached(priority: .userInitiated) {
+            let durationSec = max(Double(effectiveDurationMs) / 1000.0, 1.0)
 
-            let durationSec = max(Double(durationMs) / 1000.0, 0.001)
-
-            // 1. Extract Waveform Buckets using Zero-Copy vDSP_maxmgv (IntroStamp WaveformExtractor)
+            // 1. Extract Waveform Buckets using Zero-Copy vDSP_maxmgv
             var waveformBuckets = [Float](repeating: 0.0, count: bucketCount)
             let asset = AVAsset(url: videoURL)
 
@@ -63,19 +66,20 @@ public final class AudioExtractorService {
                 }
             }
 
-            // Fallback to FFmpeg if AVAssetReader returned empty buckets
+            // Fallback to FFmpeg if AVAssetReader returned empty buckets (MKV/x265 files)
             let maxPeak = waveformBuckets.max() ?? 0
             if maxPeak == 0 {
-                LoggerService.shared.info("[AudioExtractor] AVAssetReader empty for \(videoURL.lastPathComponent). Falling back to FFmpeg PCM extraction...")
-                if let pcm = try? await FFmpegService.shared.extractPCMAudio(url: videoURL) {
+                LoggerService.shared.info("[AudioExtractor] AVAssetReader empty for \(videoURL.lastPathComponent). Extracting via FFmpeg 1000Hz PCM...")
+                if let pcm = try? await FFmpegService.shared.extractPCMAudio(url: videoURL), !pcm.isEmpty {
                     let samplesPerBucket = max(1, pcm.count / bucketCount)
-                    for i in 0..<bucketCount {
-                        let startIdx = i * samplesPerBucket
-                        let count = min(samplesPerBucket, pcm.count - startIdx)
-                        if count > 0 {
-                            pcm.withUnsafeBufferPointer { ptr in
+                    pcm.withUnsafeBufferPointer { ptr in
+                        guard let base = ptr.baseAddress else { return }
+                        for i in 0..<bucketCount {
+                            let startIdx = i * samplesPerBucket
+                            let count = min(samplesPerBucket, pcm.count - startIdx)
+                            if count > 0 {
                                 var floatBuffer = [Float](repeating: 0, count: count)
-                                vDSP_vflt16(ptr.baseAddress! + startIdx, 1, &floatBuffer, 1, vDSP_Length(count))
+                                vDSP_vflt16(base + startIdx, 1, &floatBuffer, 1, vDSP_Length(count))
                                 var chunkMax: Float = 0
                                 vDSP_maxmgv(floatBuffer, 1, &chunkMax, vDSP_Length(count))
                                 waveformBuckets[i] = chunkMax / Float(Int16.max)
@@ -94,7 +98,7 @@ public final class AudioExtractorService {
 
             progressHandler(50)
 
-            // 2. SoundAnalysis CoreML Music Likelihood Classifier (IntroStamp AudioLikelihoodObserver)
+            // 2. SoundAnalysis CoreML Music Likelihood Classifier
             var musicBuckets = [Float](repeating: 0.5, count: bucketCount)
             do {
                 let analyzer = try SNAudioFileAnalyzer(url: videoURL)
@@ -107,14 +111,13 @@ public final class AudioExtractorService {
                 await analyzer.analyze()
                 musicBuckets = observer.resolvedMusicBuckets()
             } catch {
-                LoggerService.shared.warn("[AudioExtractor] SoundAnalysis CoreML failed: \(error). Using fallback spectral flatness.")
+                LoggerService.shared.warn("[AudioExtractor] SoundAnalysis CoreML fallback: \(error.localizedDescription)")
             }
-
 
             // Smooth music likelihood buckets (radius = 2)
             let smoothedMusic = AudioExtractorService.smoothBuckets(input: musicBuckets, radius: 2)
             progressHandler(100)
-            LoggerService.shared.info("[AudioExtractor] IntroStamp audio engine analysis complete! Buckets: \(bucketCount)")
+            LoggerService.shared.info("[AudioExtractor] Audio analysis complete! Buckets: \(bucketCount)")
 
             return (waveformBuckets, smoothedMusic)
         }.value
