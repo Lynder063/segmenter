@@ -1,14 +1,19 @@
 import Foundation
 import AVFoundation
 import Accelerate
+import SoundAnalysis
 
 public final class AudioExtractorService {
     public static let shared = AudioExtractorService()
 
     private init() {}
 
-    public func extractAudioWaveform(videoURL: URL, durationMs: Int, progressHandler: @escaping (Int) -> Void) async throws -> (buckets: [Float], musicLikelihood: [Float]) {
-        LoggerService.shared.info("[AudioExtractor] Starting audio analysis for: \(videoURL.lastPathComponent) (\(durationMs)ms)")
+    public func extractAudioWaveform(
+        videoURL: URL,
+        durationMs: Int,
+        progressHandler: @escaping (Int) -> Void
+    ) async throws -> (buckets: [Float], musicLikelihood: [Float]) {
+        LoggerService.shared.info("[AudioExtractor] Starting IntroStamp audio engine for: \(videoURL.lastPathComponent) (\(durationMs)ms)")
 
         guard durationMs > 0 else {
             throw NSError(domain: "AudioExtractor", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid video duration"])
@@ -17,152 +22,142 @@ public final class AudioExtractorService {
         let bucketCount = max(120, min(2400, durationMs / 250))
         progressHandler(10)
 
-        // Run extraction on background queue
-        return try await Task.detached(priority: .userInitiated) {
-            var samples: [Int16] = []
+        return await Task.detached(priority: .userInitiated) {
 
-            let ext = videoURL.pathExtension.lowercased()
-            let isNonNativeContainer = ["mkv", "avi", "webm", "flv", "wmv", "vob"].contains(ext)
+            let durationSec = max(Double(durationMs) / 1000.0, 0.001)
 
-            // Try AVAssetReader only for native containers (MP4, MOV, M4V)
-            if !isNonNativeContainer {
-                let asset = AVAsset(url: videoURL)
-                if let audioTrack = try? await asset.loadTracks(withMediaType: .audio).first,
-                   let reader = try? AVAssetReader(asset: asset) {
-
-                    let outputSettings: [String: Any] = [
-                        AVFormatIDKey: kAudioFormatLinearPCM,
-                        AVLinearPCMBitDepthKey: 16,
-                        AVLinearPCMIsBigEndianKey: false,
-                        AVLinearPCMIsFloatKey: false,
-                        AVLinearPCMIsNonInterleaved: false,
-                        AVNumberOfChannelsKey: 1,
-                        AVSampleRateKey: 1000
-                    ]
-
-                    let trackOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
-                    reader.add(trackOutput)
-                    reader.startReading()
-
-                    while let sampleBuffer = trackOutput.copyNextSampleBuffer() {
-                        if let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) {
-                            let length = CMBlockBufferGetDataLength(blockBuffer)
-                            var bufferSamples = [Int16](repeating: 0, count: length / 2)
-                            CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: &bufferSamples)
-                            samples.append(contentsOf: bufferSamples)
-                        }
-                    }
-                }
-            }
-
-            // Fallback / Primary for MKV / AC3 / DTS / x265 audio streams via FFmpeg
-            if samples.isEmpty {
-                LoggerService.shared.info("[AudioExtractor] Using FFmpeg PCM audio extraction for \(videoURL.lastPathComponent)...")
-                if let pcm = try? await FFmpegService.shared.extractPCMAudio(url: videoURL) {
-                    samples = pcm
-                }
-            }
-
-
-            progressHandler(50)
-            guard !samples.isEmpty else {
-                throw NSError(domain: "AudioExtractor", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to read PCM audio data from media file"])
-            }
-
-
-            progressHandler(50)
-            guard !samples.isEmpty else {
-                throw NSError(domain: "AudioExtractor", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to read PCM audio data from media file"])
-            }
-
-            // 1. Convert Int16 samples to Float using Accelerate vDSP (instant)
-            var floatSamples = [Float](repeating: 0.0, count: samples.count)
-            samples.withUnsafeBufferPointer { sPtr in
-                vDSP_vflt16(sPtr.baseAddress!, 1, &floatSamples, 1, vDSP_Length(samples.count))
-            }
-
-            // Absolute values
-            var absSamples = [Float](repeating: 0.0, count: samples.count)
-            vDSP_vabs(&floatSamples, 1, &absSamples, 1, vDSP_Length(samples.count))
-
-            // 2. Compute Peak Waveform Buckets using Accelerate vDSP_maxv
-            let samplesPerBucket = max(1, samples.count / bucketCount)
+            // 1. Extract Waveform Buckets using Zero-Copy vDSP_maxmgv (IntroStamp WaveformExtractor)
             var waveformBuckets = [Float](repeating: 0.0, count: bucketCount)
-            var maxPeak: Float = 0.0
+            let asset = AVAsset(url: videoURL)
 
-            for i in 0..<bucketCount {
-                let startIdx = i * samplesPerBucket
-                let count = min(samplesPerBucket, samples.count - startIdx)
-                if count > 0 {
-                    absSamples.withUnsafeBufferPointer { ptr in
-                        var peak: Float = 0.0
-                        vDSP_maxv(ptr.baseAddress! + startIdx, 1, &peak, vDSP_Length(count))
-                        waveformBuckets[i] = peak
-                        if peak > maxPeak { maxPeak = peak }
-                    }
-                }
-            }
+            if let audioTrack = try? await asset.loadTracks(withMediaType: .audio).first,
+               let reader = try? AVAssetReader(asset: asset) {
 
-            // Vector normalize waveform buckets
-            if maxPeak > 0 {
-                var divisor = maxPeak
-                vDSP_vsdiv(waveformBuckets, 1, &divisor, &waveformBuckets, 1, vDSP_Length(bucketCount))
-            }
+                let outputSettings: [String: Any] = [
+                    AVFormatIDKey: kAudioFormatLinearPCM,
+                    AVLinearPCMBitDepthKey: 16,
+                    AVLinearPCMIsBigEndianKey: false,
+                    AVLinearPCMIsFloatKey: false,
+                    AVLinearPCMIsNonInterleaved: false
+                ]
 
-            progressHandler(75)
+                let trackOutput = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
+                trackOutput.alwaysCopiesSampleData = false
 
-            // 3. Music Likelihood via Fast FFT Spectral Flatness
-            var musicBuckets = [Float](repeating: 0.5, count: bucketCount)
-            let fftSize = 512
-            let log2n = vDSP_Length(log2(Double(fftSize)))
-            if let fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) {
-                defer { vDSP_destroy_fftsetup(fftSetup) }
+                if reader.canAdd(trackOutput) {
+                    reader.add(trackOutput)
+                    if reader.startReading() {
+                        while reader.status == .reading {
+                            guard let sampleBuffer = trackOutput.copyNextSampleBuffer() else { break }
+                            let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                            let seconds = max(0, timestamp.seconds)
+                            let ratio = min(max(seconds / durationSec, 0), 1)
+                            let index = min(bucketCount - 1, max(0, Int((ratio * Double(bucketCount)).rounded(.down))))
 
-                var realP = [Float](repeating: 0.0, count: fftSize / 2)
-                var imagP = [Float](repeating: 0.0, count: fftSize / 2)
-
-                for i in 0..<bucketCount {
-                    let centerSample = Int((Double(i) / Double(bucketCount)) * Double(samples.count))
-                    let startIdx = max(0, centerSample - fftSize / 2)
-                    let count = min(fftSize, samples.count - startIdx)
-
-                    if count >= fftSize {
-                        let windowed = Array(floatSamples[startIdx..<(startIdx + fftSize)])
-                        realP.withUnsafeMutableBufferPointer { rPtr in
-                            imagP.withUnsafeMutableBufferPointer { iPtr in
-                                var splitComplex = DSPSplitComplex(realp: rPtr.baseAddress!, imagp: iPtr.baseAddress!)
-                                windowed.withUnsafeBufferPointer { wPtr in
-                                    wPtr.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: fftSize / 2) { complexPtr in
-                                        vDSP_ctoz(complexPtr, 2, &splitComplex, 1, vDSP_Length(fftSize / 2))
-                                    }
-                                }
-                                vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(FFT_FORWARD))
-
-                                var power = [Float](repeating: 0.0, count: fftSize / 2)
-                                vDSP_zvmags(&splitComplex, 1, &power, 1, vDSP_Length(fftSize / 2))
-
-                                var meanPower: Float = 0.0
-                                vDSP_meanv(power, 1, &meanPower, vDSP_Length(fftSize / 2))
-
-                                if meanPower > 0.001 {
-                                    let musicScore = max(0.0, min(1.0, 1.0 - (meanPower * 0.1)))
-                                    musicBuckets[i] = musicScore
-                                }
+                            let peak = AudioExtractorService.peakAmplitude(from: sampleBuffer)
+                            if peak > waveformBuckets[index] {
+                                waveformBuckets[index] = peak
                             }
                         }
                     }
                 }
             }
 
-            // Smooth music buckets (radius = 2)
+            // Fallback to FFmpeg if AVAssetReader returned empty buckets
+            let maxPeak = waveformBuckets.max() ?? 0
+            if maxPeak == 0 {
+                LoggerService.shared.info("[AudioExtractor] AVAssetReader empty for \(videoURL.lastPathComponent). Falling back to FFmpeg PCM extraction...")
+                if let pcm = try? await FFmpegService.shared.extractPCMAudio(url: videoURL) {
+                    let samplesPerBucket = max(1, pcm.count / bucketCount)
+                    for i in 0..<bucketCount {
+                        let startIdx = i * samplesPerBucket
+                        let count = min(samplesPerBucket, pcm.count - startIdx)
+                        if count > 0 {
+                            pcm.withUnsafeBufferPointer { ptr in
+                                var floatBuffer = [Float](repeating: 0, count: count)
+                                vDSP_vflt16(ptr.baseAddress! + startIdx, 1, &floatBuffer, 1, vDSP_Length(count))
+                                var chunkMax: Float = 0
+                                vDSP_maxmgv(floatBuffer, 1, &chunkMax, vDSP_Length(count))
+                                waveformBuckets[i] = chunkMax / Float(Int16.max)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Normalize Waveform Buckets
+            let finalMax = waveformBuckets.max() ?? 0
+            if finalMax > 0 {
+                var divisor = finalMax
+                vDSP_vsdiv(waveformBuckets, 1, &divisor, &waveformBuckets, 1, vDSP_Length(bucketCount))
+            }
+
+            progressHandler(50)
+
+            // 2. SoundAnalysis CoreML Music Likelihood Classifier (IntroStamp AudioLikelihoodObserver)
+            var musicBuckets = [Float](repeating: 0.5, count: bucketCount)
+            do {
+                let analyzer = try SNAudioFileAnalyzer(url: videoURL)
+                let request = try SNClassifySoundRequest(classifierIdentifier: .version1)
+                request.windowDuration = CMTime(seconds: 2.0, preferredTimescale: 600)
+                request.overlapFactor = 0.0
+
+                let observer = SoundLikelihoodObserver(bucketCount: bucketCount, durationSeconds: durationSec)
+                try analyzer.add(request, withObserver: observer)
+                await analyzer.analyze()
+                musicBuckets = observer.resolvedMusicBuckets()
+            } catch {
+                LoggerService.shared.warn("[AudioExtractor] SoundAnalysis CoreML failed: \(error). Using fallback spectral flatness.")
+            }
+
+
+            // Smooth music likelihood buckets (radius = 2)
             let smoothedMusic = AudioExtractorService.smoothBuckets(input: musicBuckets, radius: 2)
             progressHandler(100)
-            LoggerService.shared.info("[AudioExtractor] Ultra-fast audio analysis complete! Buckets: \(bucketCount)")
+            LoggerService.shared.info("[AudioExtractor] IntroStamp audio engine analysis complete! Buckets: \(bucketCount)")
 
             return (waveformBuckets, smoothedMusic)
         }.value
     }
 
+    private static func peakAmplitude(from sampleBuffer: CMSampleBuffer) -> Float {
+        guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return 0 }
+        let totalLength = CMBlockBufferGetDataLength(blockBuffer)
+        guard totalLength >= MemoryLayout<Int16>.stride else { return 0 }
+
+        var maxSample: Float = 0
+        var offset = 0
+
+        while offset < totalLength {
+            var lengthAtOffset = 0
+            var chunkTotalLength = 0
+            var chunkPointer: UnsafeMutablePointer<Int8>?
+
+            let status = CMBlockBufferGetDataPointer(
+                blockBuffer,
+                atOffset: offset,
+                lengthAtOffsetOut: &lengthAtOffset,
+                totalLengthOut: &chunkTotalLength,
+                dataPointerOut: &chunkPointer
+            )
+
+            guard status == kCMBlockBufferNoErr, let chunkPointer, lengthAtOffset > 0 else { break }
+
+            let sampleCount = lengthAtOffset / MemoryLayout<Int16>.stride
+            if sampleCount > 0 {
+                chunkPointer.withMemoryRebound(to: Int16.self, capacity: sampleCount) { samples in
+                    var floatBuffer = [Float](repeating: 0, count: sampleCount)
+                    vDSP_vflt16(samples, 1, &floatBuffer, 1, vDSP_Length(sampleCount))
+                    var chunkMax: Float = 0
+                    vDSP_maxmgv(floatBuffer, 1, &chunkMax, vDSP_Length(sampleCount))
+                    if chunkMax > maxSample { maxSample = chunkMax }
+                }
+            }
+            offset += lengthAtOffset
+        }
+
+        return maxSample / Float(Int16.max)
+    }
 
     private static func smoothBuckets(input: [Float], radius: Int) -> [Float] {
         guard !input.isEmpty && radius > 0 else { return input }
@@ -184,5 +179,87 @@ public final class AudioExtractorService {
         }
         return result
     }
+}
 
+private final class SoundLikelihoodObserver: NSObject, SNResultsObserving {
+    private let bucketCount: Int
+    private let durationSeconds: Double
+    private var musicSums: [Float]
+    private var speechSums: [Float]
+    private var counts: [Int]
+
+    init(bucketCount: Int, durationSeconds: Double) {
+        self.bucketCount = bucketCount
+        self.durationSeconds = max(durationSeconds, 0.001)
+        self.musicSums = Array(repeating: 0.0, count: bucketCount)
+        self.speechSums = Array(repeating: 0.0, count: bucketCount)
+        self.counts = Array(repeating: 0, count: bucketCount)
+    }
+
+    func request(_ request: SNRequest, didProduce result: SNResult) {
+        guard let classificationResult = result as? SNClassificationResult else { return }
+        let musicConfidence = highestConfidence(
+            in: classificationResult,
+            matchingAnyOf: ["music", "singing", "choir", "yodeling", "rapping", "humming", "whistling"],
+            excluding: ["speech", "spoken", "voice"]
+        )
+        let speechConfidence = highestConfidence(
+            in: classificationResult,
+            matchingAnyOf: ["speech", "spoken", "dialog", "dialogue", "voice", "narration", "conversation"],
+            excluding: ["sing", "choir", "yodel", "rapping", "humming", "whistling", "music"]
+        )
+
+        guard musicConfidence > 0 || speechConfidence > 0 else { return }
+
+        let start = max(0, classificationResult.timeRange.start.seconds)
+        let end = max(start, classificationResult.timeRange.end.seconds)
+        let startRatio = min(max(start / durationSeconds, 0), 1)
+        let endRatio = min(max(end / durationSeconds, 0), 1)
+
+        let startIndex = min(bucketCount - 1, max(0, Int((startRatio * Double(bucketCount)).rounded(.down))))
+        let endIndex = min(bucketCount - 1, max(startIndex, Int((endRatio * Double(bucketCount)).rounded(.down))))
+
+        for index in startIndex...endIndex {
+            musicSums[index] += Float(musicConfidence)
+            speechSums[index] += Float(speechConfidence)
+            counts[index] += 1
+        }
+    }
+
+    func request(_ request: SNRequest, didFailWithError error: Error) {}
+    func requestDidComplete(_ request: SNRequest) {}
+
+    func resolvedMusicBuckets() -> [Float] {
+        let speechSuppressionFactor: Float = 0.75
+        return (0..<bucketCount).map { index in
+            let count = counts[index]
+            guard count > 0 else { return 0.5 }
+
+            let music = min(max(musicSums[index] / Float(count), 0), 1)
+            let speech = min(max(speechSums[index] / Float(count), 0), 1)
+            let effectiveMusic = max(0, music - (speech * speechSuppressionFactor))
+            return min(max(effectiveMusic, 0), 1)
+        }
+    }
+
+    private func highestConfidence(
+        in result: SNClassificationResult,
+        matchingAnyOf keywords: [String],
+        excluding excludedKeywords: [String]
+    ) -> Double {
+        var best: Double = 0
+        for classification in result.classifications {
+            let identifier = classification.identifier.lowercased()
+            let matchesKeyword = keywords.contains { identifier.contains($0) }
+            guard matchesKeyword else { continue }
+
+            let isExcluded = excludedKeywords.contains { identifier.contains($0) }
+            guard !isExcluded else { continue }
+
+            if classification.confidence > best {
+                best = classification.confidence
+            }
+        }
+        return best
+    }
 }
