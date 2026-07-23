@@ -107,6 +107,8 @@ public final class RCDEngineService {
             // 3a. Search Intro Candidates in first 15 mins (max bucket 3600)
             let maxIntroSearch = min(3600, max(0, totalBuckets - 120))
 
+            let targetThresh = Float(similarityThreshold)
+
             for wLen in windowLengths {
                 if maxIntroSearch <= wLen { continue }
 
@@ -141,7 +143,7 @@ public final class RCDEngineService {
                                 }
                             }
 
-                            if bestSim > 0.70 {
+                            if bestSim >= targetThresh {
                                 matchCount += 1
                                 totalScore += bestSim
                             }
@@ -187,7 +189,7 @@ public final class RCDEngineService {
                                 }
                             }
 
-                            if bestSim > 0.70 {
+                            if bestSim >= targetThresh {
                                 matchCount += 1
                                 totalScore += bestSim
                             }
@@ -212,12 +214,16 @@ public final class RCDEngineService {
             let startSec = Double(intro.startBucket) * 0.25
             let endSec = Double(intro.endBucket) * 0.25
             log(String(format: "RCD Match Found [INTRO]: %02d:%02d - %02d:%02d (Confidence: %.1f%%)", Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, intro.score * 100.0))
+        } else {
+            log(String(format: "No INTRO match found above similarity threshold %.0f%%", similarityThreshold * 100.0))
         }
 
         if let credits = bestCredits {
             let startSec = Double(credits.startBucket) * 0.25
             let endSec = Double(credits.endBucket) * 0.25
             log(String(format: "RCD Match Found [CREDITS]: %02d:%02d - %02d:%02d (Confidence: %.1f%%)", Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, credits.score * 100.0))
+        } else {
+            log(String(format: "No CREDITS match found above similarity threshold %.0f%%", similarityThreshold * 100.0))
         }
 
         for video in videoFiles {
@@ -228,9 +234,6 @@ public final class RCDEngineService {
                 let startSec = Double(intro.startBucket) * 0.25
                 let endSec = Double(intro.endBucket) * 0.25
                 matches.append(RCDMatch(type: .intro, startSec: startSec, endSec: endSec, confidence: intro.score))
-            } else {
-                // Heuristic fallback if cross-correlation was uniform
-                matches.append(RCDMatch(type: .intro, startSec: 90.0, endSec: 180.0, confidence: 0.85))
             }
 
             if let credits = bestCredits {
@@ -238,6 +241,7 @@ public final class RCDEngineService {
                 let endSec = Double(credits.endBucket) * 0.25
                 matches.append(RCDMatch(type: .credits, startSec: startSec, endSec: endSec, confidence: credits.score))
             }
+
 
             results[epName] = matches
         }
