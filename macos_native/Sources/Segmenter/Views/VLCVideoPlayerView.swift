@@ -30,24 +30,18 @@ public struct VLCVideoPlayerView: NSViewRepresentable {
         self.onDurationChanged = onDurationChanged
     }
 
-    public func makeNSView(context: Context) -> NSView {
-        let containerView = NSView()
-        containerView.wantsLayer = true
-        containerView.layer?.backgroundColor = NSColor.black.cgColor
-
-        let player = VLCMediaPlayer()
-        player.drawable = containerView
-        player.delegate = context.coordinator
-        context.coordinator.mediaPlayer = player
+    public func makeNSView(context: Context) -> VLCPlayerContainerNSView {
+        let container = VLCPlayerContainerNSView()
+        context.coordinator.setupPlayer(containerView: container.videoView)
 
         if let url = videoURL {
             context.coordinator.loadMedia(url: url)
         }
 
-        return containerView
+        return container
     }
 
-    public func updateNSView(_ nsView: NSView, context: Context) {
+    public func updateNSView(_ nsView: VLCPlayerContainerNSView, context: Context) {
         context.coordinator.update(
             url: videoURL,
             isPlaying: isPlaying,
@@ -67,6 +61,13 @@ public struct VLCVideoPlayerView: NSViewRepresentable {
 
         init(parent: VLCVideoPlayerView) {
             self.parent = parent
+        }
+
+        func setupPlayer(containerView: NSView) {
+            let player = VLCMediaPlayer()
+            player.drawable = containerView
+            player.delegate = self
+            self.mediaPlayer = player
         }
 
         func loadMedia(url: URL) {
@@ -131,7 +132,36 @@ public struct VLCVideoPlayerView: NSViewRepresentable {
                 }
             }
         }
+    }
+}
 
+public class VLCPlayerContainerNSView: NSView {
+    public let videoView = NSView()
 
+    override public init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setupView()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupView()
+    }
+
+    private func setupView() {
+        self.wantsLayer = true
+        self.layer?.backgroundColor = NSColor.black.cgColor
+        self.layer?.masksToBounds = true
+
+        videoView.wantsLayer = true
+        videoView.layer?.backgroundColor = NSColor.black.cgColor
+        videoView.autoresizingMask = [.width, .height]
+        videoView.frame = self.bounds
+        self.addSubview(videoView)
+    }
+
+    override public func layout() {
+        super.layout()
+        videoView.frame = self.bounds
     }
 }

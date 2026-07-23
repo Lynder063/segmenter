@@ -51,8 +51,11 @@ public struct MainWindowView: View {
                 onJumpToSegment: jumpToSegment,
                 onClearDraft: clearDraft
             )
+            .frame(width: 320)
+            .layoutPriority(1)
 
             Divider()
+
 
             // Right Main Viewport
             VStack(spacing: 0) {
