@@ -19,12 +19,14 @@ public final class RCDEngineService {
         }
 
         var videoFiles: [URL] = []
-        for case let url as URL in enumerator {
+        let urls = enumerator.allObjects.compactMap { $0 as? URL }
+        for url in urls {
             let ext = url.pathExtension.lowercased()
             if ["mp4", "mkv", "avi", "mov", "webm", "m4v"].contains(ext) {
                 videoFiles.append(url)
             }
         }
+
 
         // Natural sort filenames
         videoFiles.sort { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }

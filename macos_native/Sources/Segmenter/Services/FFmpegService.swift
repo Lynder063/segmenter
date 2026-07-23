@@ -223,10 +223,12 @@ public final class FFmpegService {
     }
 
     // Extract fast 160x90 JPEG thumbnail at timeMs via ffmpeg
+    @MainActor
     public func extractThumbnail(url: URL, timeMs: Int) async -> NSImage? {
         guard let ffmpeg = ffmpegPath else { return nil }
 
-        return await Task.detached(priority: .userInitiated) {
+
+        let imageData: Data? = await Task.detached(priority: .userInitiated) {
             let sec = Double(timeMs) / 1000.0
             let tmpPath = "/tmp/thumb_\(abs(url.path.hashValue))_\(timeMs).jpg"
 
@@ -249,14 +251,21 @@ public final class FFmpegService {
                 try process.run()
                 process.waitUntilExit()
                 if process.terminationStatus == 0 && FileManager.default.fileExists(atPath: tmpPath),
-                   let image = NSImage(contentsOfFile: tmpPath) {
+                   let data = try? Data(contentsOf: URL(fileURLWithPath: tmpPath)) {
                     try? FileManager.default.removeItem(atPath: tmpPath)
-                    return image
+                    return data
                 }
             } catch {
                 // Ignore error
             }
             return nil
         }.value
+
+        if let data = imageData {
+            return NSImage(data: data)
+        }
+        return nil
     }
+
+
 }

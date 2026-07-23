@@ -63,8 +63,9 @@ public actor TheIntroDBClient {
             request.addValue("Bearer \(key.trimmingCharacters(in: .whitespaces))", forHTTPHeaderField: "Authorization")
         }
 
-        let (data, response, usage) = try await performRequest(request)
+        let (data, _, usage) = try await performRequest(request)
         updateRateLimit(from: usage)
+
 
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             return (json, usage)
@@ -212,8 +213,9 @@ public actor TMDBClient {
             URLQueryItem(name: "include_adult", value: "false")
         ]
         if let y = hint.year {
-            queryItems.append(URLQueryItem(name: "year", value: String(y)))
+            queryItems.append(URLQueryItem(name: yearQueryName, value: String(y)))
         }
+
         components.queryItems = queryItems
 
         var request = URLRequest(url: components.url!)
