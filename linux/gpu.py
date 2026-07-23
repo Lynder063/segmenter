@@ -34,6 +34,11 @@ try:
             GPU_BACKEND = "NVIDIA CUDA"
 
         logger.info("GPU detected: %s (%s)", GPU_NAME, GPU_BACKEND)
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        GPU_AVAILABLE = True
+        GPU_NAME = "Apple Silicon GPU"
+        GPU_BACKEND = "Apple Silicon MPS"
+        logger.info("GPU detected: %s (%s)", GPU_NAME, GPU_BACKEND)
     else:
         logger.info("No GPU detected, using CPU")
 
@@ -45,8 +50,10 @@ def get_device():
     """Return the best available torch device."""
     try:
         import torch
-        if GPU_AVAILABLE:
+        if torch.cuda.is_available():
             return torch.device("cuda")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
         return torch.device("cpu")
     except ImportError:
         return "cpu"
@@ -60,3 +67,9 @@ def is_nvidia() -> bool:
 def is_amd() -> bool:
     """Return True if the GPU backend is AMD ROCm."""
     return GPU_BACKEND == "AMD ROCm"
+
+
+def is_apple_silicon() -> bool:
+    """Return True if the GPU backend is Apple Silicon MPS."""
+    return GPU_BACKEND == "Apple Silicon MPS"
+
