@@ -135,27 +135,34 @@ public struct FrameStripView: View {
         let missingTimes = targetTimes.filter { thumbnailCache[$0] == nil }
         guard !missingTimes.isEmpty && !isGenerating else { return }
 
+        let ext = url.pathExtension.lowercased()
+        let isNativeContainer = ["mp4", "mov", "m4v"].contains(ext)
+
         isGenerating = true
         Task.detached(priority: .userInitiated) {
             let asset = AVAsset(url: url)
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 160, height: 90)
-            generator.requestedTimeToleranceBefore = CMTime(value: 500, timescale: 1000)
-            generator.requestedTimeToleranceAfter = CMTime(value: 500, timescale: 1000)
+            let generator = isNativeContainer ? AVAssetImageGenerator(asset: asset) : nil
+            if let generator {
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = CGSize(width: 160, height: 90)
+                generator.requestedTimeToleranceBefore = CMTime(value: 500, timescale: 1000)
+                generator.requestedTimeToleranceAfter = CMTime(value: 500, timescale: 1000)
+            }
 
             await withTaskGroup(of: (Int, Data?).self) { group in
                 for timeMs in missingTimes {
                     group.addTask {
-                        // 1. Try AVAssetImageGenerator first
-                        let cmTime = CMTime(value: CMTimeValue(timeMs), timescale: 1000)
-                        if let cgImage = try? generator.copyCGImage(at: cmTime, actualTime: nil) {
-                            let rep = NSBitmapImageRep(cgImage: cgImage)
-                            let data = rep.representation(using: .jpeg, properties: [:])
-                            return (timeMs, data)
+                        // 1. For native containers (mp4/mov), try AVAssetImageGenerator
+                        if isNativeContainer, let gen = generator {
+                            let cmTime = CMTime(value: CMTimeValue(timeMs), timescale: 1000)
+                            if let cgImage = try? gen.copyCGImage(at: cmTime, actualTime: nil) {
+                                let rep = NSBitmapImageRep(cgImage: cgImage)
+                                let data = rep.representation(using: .jpeg, properties: [:])
+                                return (timeMs, data)
+                            }
                         }
 
-                        // 2. Fast FFmpeg in-memory pipe fallback for MKV/x265 files
+                        // 2. Fast FFmpeg in-memory stdout pipe for MKV/x265/non-native files (<0.02s)
                         if let data = await FFmpegService.shared.extractThumbnailData(url: url, timeMs: timeMs) {
                             return (timeMs, data)
                         }
@@ -172,6 +179,7 @@ public struct FrameStripView: View {
                     }
                 }
             }
+
 
 
 
