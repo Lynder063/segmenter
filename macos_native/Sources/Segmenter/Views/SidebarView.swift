@@ -167,6 +167,8 @@ public struct SidebarView: View {
                         }
 
                         Button(action: {
+                            print("🔴 [GUI TERMINAL LOG] 'Scan Season (RCD Autoscan)' button clicked in SidebarView!")
+                            LoggerService.shared.info("[GUI] 'Scan Season (RCD Autoscan)' button clicked in SidebarView")
                             isRCDModalPresented = true
                         }) {
                             HStack {
@@ -175,6 +177,7 @@ public struct SidebarView: View {
                             }
                             .frame(maxWidth: .infinity)
                         }
+
 
                     }
                     .padding(6)

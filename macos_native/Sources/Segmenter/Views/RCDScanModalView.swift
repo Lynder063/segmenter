@@ -338,13 +338,18 @@ public struct RCDScanModalView: View {
         }
         .frame(width: 620, height: 680)
         .onAppear {
+            print("🔴 [GUI TERMINAL LOG] RCDScanModalView appeared! currentVideoURL: \(currentVideoURL?.path ?? "NIL")")
             if let currentURL = currentVideoURL {
                 directoryURL = currentURL.deletingLastPathComponent()
+                print("🔴 [GUI TERMINAL LOG] Pre-filled directoryURL: \(directoryURL?.path ?? "NIL")")
+            } else {
+                print("🔴 [GUI TERMINAL LOG] directoryURL is initially NIL!")
             }
         }
     }
 
     private func selectDirectory() {
+        print("🔴 [GUI TERMINAL LOG] Triggering NSOpenPanel for season directory selection...")
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -352,20 +357,27 @@ public struct RCDScanModalView: View {
         panel.message = "Select Season Directory for RCD Scan"
 
         if panel.runModal() == .OK, let url = panel.url {
+            print("🔴 [GUI TERMINAL LOG] NSOpenPanel OK! Selected directory: \(url.path)")
             self.directoryURL = url
+        } else {
+            print("🔴 [GUI TERMINAL LOG] NSOpenPanel Cancelled or Failed!")
         }
     }
 
     private func startScan() {
+        print("🔴 [GUI TERMINAL LOG] Start Season Scan button pressed!")
         if directoryURL == nil {
+            print("🔴 [GUI TERMINAL LOG] directoryURL is NIL, calling selectDirectory()...")
             selectDirectory()
         }
         guard let dirURL = directoryURL else {
+            print("🔴 [GUI TERMINAL LOG] ERROR: directoryURL is still NIL after selectDirectory()!")
             statusText = "Error: No season directory selected"
             debugLogs.append("[RCD Modal] Error: No season directory selected. Please click 'Browse Folder...'.")
             return
         }
 
+        print("🔴 [GUI TERMINAL LOG] Starting RCD scan on dirURL: \(dirURL.path) using method '\(selectedMethod.rawValue)'")
         isScanning = true
         progressPct = 0
         statusText = "Initializing \(selectedMethod.rawValue)..."
@@ -377,6 +389,7 @@ public struct RCDScanModalView: View {
         debugLogs.append("[\(timeStr)] [RCD Modal] Min Segment Length: \(Int(minSegmentLengthSec))s, Threshold: \(Int(similarityThreshold))%")
 
         Task.detached(priority: .userInitiated) {
+            print("🔴 [GUI TERMINAL LOG] Task.detached background worker started for RCDEngineService.scanSeason...")
             do {
                 let results = try await RCDEngineService.shared.scanSeason(
                     directoryURL: dirURL,
@@ -384,11 +397,13 @@ public struct RCDScanModalView: View {
                     minSegmentLengthSec: minSegmentLengthSec,
                     similarityThreshold: similarityThreshold / 100.0,
                     debugLogger: { line in
+                        print("🔴 [GUI TERMINAL LOG] [ENGINE LOG]: \(line)")
                         DispatchQueue.main.async {
                             self.debugLogs.append(line)
                         }
                     },
                     progressHandler: { text, pct in
+                        print("🔴 [GUI TERMINAL LOG] [PROGRESS]: \(pct)% - \(text)")
                         DispatchQueue.main.async {
                             self.statusText = text
                             self.progressPct = pct
@@ -396,6 +411,7 @@ public struct RCDScanModalView: View {
                     }
                 )
 
+                print("🔴 [GUI TERMINAL LOG] RCDEngineService completed with \(results.count) results!")
                 await MainActor.run {
                     self.scanResults = results
                     self.isScanning = false
@@ -404,6 +420,7 @@ public struct RCDScanModalView: View {
                 }
             } catch {
                 let errStr = error.localizedDescription
+                print("🔴 [GUI TERMINAL LOG] EXCEPTION THROWN: \(errStr)")
                 await MainActor.run {
                     self.isScanning = false
                     self.statusText = "Scan Error: \(errStr)"
@@ -412,6 +429,7 @@ public struct RCDScanModalView: View {
             }
         }
     }
+
 
 
     private func applyResultsToCurrentVideo() {
