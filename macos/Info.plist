@@ -28,6 +28,7 @@
     <true/>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026 Segmenter Contributors. MIT License.</string>
+
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
@@ -35,14 +36,63 @@
             <string>Video Files</string>
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
             <key>LSItemContentTypes</key>
             <array>
+                <string>public.matroska-video</string>
+                <string>org.matroska.mkv</string>
                 <string>public.movie</string>
                 <string>public.video</string>
                 <string>public.mpeg-4</string>
                 <string>com.apple.quicktime-movie</string>
-                <string>org.matroska.mkv</string>
+                <string>public.avi</string>
+                <string>org.webmproject.webm</string>
             </array>
+        </dict>
+    </array>
+
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>public.matroska-video</string>
+            <key>UTTypeDescription</key>
+            <string>Matroska Video File</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.movie</string>
+                <string>public.video</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>mkv</string>
+                    <string>MKV</string>
+                </array>
+                <key>public.mime-type</key>
+                <string>video/x-matroska</string>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>org.matroska.mkv</string>
+            <key>UTTypeDescription</key>
+            <string>Matroska Video File</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.movie</string>
+                <string>public.video</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>mkv</string>
+                    <string>MKV</string>
+                </array>
+            </dict>
         </dict>
     </array>
 </dict>

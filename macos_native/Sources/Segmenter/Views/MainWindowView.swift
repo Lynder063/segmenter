@@ -1,5 +1,7 @@
 import SwiftUI
+import AVFoundation
 import AppKit
+import UniformTypeIdentifiers
 
 public struct MainWindowView: View {
     @State private var videoURL: URL? = nil
@@ -194,11 +196,19 @@ public struct MainWindowView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie, .item]
+        panel.allowsOtherFileTypes = true
+
+        var types: [UTType] = [.movie, .video, .mpeg4Movie, .quickTimeMovie, .item]
+        if let mkvType = UTType(filenameExtension: "mkv") { types.append(mkvType) }
+        if let matroskaType = UTType("public.matroska-video") { types.append(matroskaType) }
+        if let aviType = UTType(filenameExtension: "avi") { types.append(aviType) }
+        if let webmType = UTType(filenameExtension: "webm") { types.append(webmType) }
+        panel.allowedContentTypes = types
 
         if panel.runModal() == .OK, let rawUrl = panel.url {
             self.statusMessage = "Loading \(rawUrl.lastPathComponent)..."
             LoggerService.shared.info("[UI] User opened video file: \(rawUrl.path)")
+
 
             // Auto-parse filename hints
             let hint = FilenameMediaParser.parse(filePathOrName: rawUrl.path)
