@@ -99,21 +99,20 @@ public final class RCDEngineService {
            let baseData = episodeFeatures[baseName] {
 
             let baseBuckets = baseData.buckets
-            let totalBuckets = baseBuckets.count
+            let totalBuckets = baseBuckets.count / 8
+            let targetThresh = Float(similarityThreshold)
 
-            // Window lengths to evaluate: 30s (120 buckets), 45s (180), 60s (240), 90s (360), 120s (480)
+            // Window lengths to evaluate in buckets (4 buckets/sec): 30s (120 buckets), 45s (180), 60s (240), 90s (360), 120s (480)
             let windowLengths = [120, 180, 240, 360, 480]
 
             // 3a. Search Intro Candidates in first 15 mins (max bucket 3600)
             let maxIntroSearch = min(3600, max(0, totalBuckets - 120))
 
-            let targetThresh = Float(similarityThreshold)
-
             for wLen in windowLengths {
                 if maxIntroSearch <= wLen { continue }
 
                 for startIdx in stride(from: 0, to: maxIntroSearch - wLen, by: 4) { // step by 1 sec
-                    let sliceA = Array(baseBuckets[startIdx..<(startIdx + wLen)])
+                    let sliceA = Array(baseBuckets[(startIdx * 8)..<((startIdx + wLen) * 8)])
                     let normA = self.vectorNorm(sliceA)
                     guard normA > 0.01 else { continue }
 
@@ -123,7 +122,8 @@ public final class RCDEngineService {
                     for ep in sampleEpisodes.dropFirst() {
                         if let epData = episodeFeatures[ep.lastPathComponent] {
                             let epBuckets = epData.buckets
-                            let epSearchMax = min(3600, max(0, epBuckets.count - wLen))
+                            let epTotalBuckets = epBuckets.count / 8
+                            let epSearchMax = min(3600, max(0, epTotalBuckets - wLen))
                             var bestSim: Float = 0
 
                             // Slide within +-60 seconds window in target episode
@@ -132,11 +132,11 @@ public final class RCDEngineService {
 
                             if searchEnd > searchStart {
                                 for targetIdx in stride(from: searchStart, to: searchEnd, by: 4) {
-                                    let sliceB = Array(epBuckets[targetIdx..<(targetIdx + wLen)])
+                                    let sliceB = Array(epBuckets[(targetIdx * 8)..<((targetIdx + wLen) * 8)])
                                     let normB = self.vectorNorm(sliceB)
                                     if normB > 0.01 {
                                         var dot: Float = 0
-                                        vDSP_dotpr(sliceA, 1, sliceB, 1, &dot, vDSP_Length(wLen))
+                                        vDSP_dotpr(sliceA, 1, sliceB, 1, &dot, vDSP_Length(wLen * 8))
                                         let sim = dot / (normA * normB)
                                         if sim > bestSim { bestSim = sim }
                                     }
@@ -162,7 +162,7 @@ public final class RCDEngineService {
             for wLen in [120, 180, 240, 360] {
                 if totalBuckets - minCreditsSearch <= wLen { continue }
                 for startIdx in stride(from: minCreditsSearch, to: max(minCreditsSearch + 1, totalBuckets - wLen), by: 8) {
-                    let sliceA = Array(baseBuckets[startIdx..<(startIdx + wLen)])
+                    let sliceA = Array(baseBuckets[(startIdx * 8)..<((startIdx + wLen) * 8)])
                     let normA = self.vectorNorm(sliceA)
                     guard normA > 0.01 else { continue }
 
@@ -172,17 +172,18 @@ public final class RCDEngineService {
                     for ep in sampleEpisodes.dropFirst() {
                         if let epData = episodeFeatures[ep.lastPathComponent] {
                             let epBuckets = epData.buckets
-                            let epMinCredits = max(0, epBuckets.count - 2400)
+                            let epTotalBuckets = epBuckets.count / 8
+                            let epMinCredits = max(0, epTotalBuckets - 2400)
                             var bestSim: Float = 0
 
-                            if epBuckets.count > wLen {
-                                for targetIdx in stride(from: epMinCredits, to: epBuckets.count - wLen, by: 8) {
-                                    let sliceB = Array(epBuckets[targetIdx..<(targetIdx + wLen)])
+                            if epTotalBuckets > wLen {
+                                for targetIdx in stride(from: epMinCredits, to: epTotalBuckets - wLen, by: 8) {
+                                    let sliceB = Array(epBuckets[(targetIdx * 8)..<((targetIdx + wLen) * 8)])
                                     let normB = self.vectorNorm(sliceB)
 
                                     if normB > 0.01 {
                                         var dot: Float = 0
-                                        vDSP_dotpr(sliceA, 1, sliceB, 1, &dot, vDSP_Length(wLen))
+                                        vDSP_dotpr(sliceA, 1, sliceB, 1, &dot, vDSP_Length(wLen * 8))
                                         let sim = dot / (normA * normB)
                                         if sim > bestSim { bestSim = sim }
                                     }
@@ -203,6 +204,7 @@ public final class RCDEngineService {
                 }
             }
         }
+
 
         progressHandler("Finalizing detected repeated sequence boundaries...", 90)
 
@@ -255,24 +257,68 @@ public final class RCDEngineService {
 
     private func extractFastFeatureVector(url: URL) async -> [Float] {
         let pcmSamples = (try? await FFmpegService.shared.extractPCMAudioSnippet(url: url, durationSec: 900)) ?? []
-        guard !pcmSamples.isEmpty else { return [] }
+        guard pcmSamples.count >= 2000 else { return [] }
 
-        let chunkSize = 250
-        let bucketCount = pcmSamples.count / chunkSize
-        var floatBuckets = [Float](repeating: 0.0, count: bucketCount)
+        // Downsampled audio at 4000 Hz -> 1000 samples per 0.25s bucket
+        let samplesPerBucket = 1000
+        let bucketCount = pcmSamples.count / samplesPerBucket
+        var featureVector = [Float](repeating: 0.0, count: bucketCount * 8) // 8 frequency bands per bucket
+
+        // Prepare FFT setup for N = 512 using Accelerate vDSP
+        let log2n = vDSP_Length(9) // 2^9 = 512
+        guard let fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else { return [] }
+        defer { vDSP_destroy_fftsetup(fftSetup) }
+
+        var window = [Float](repeating: 0.0, count: 512)
+        vDSP_hann_window(&window, vDSP_Length(512), Int32(vDSP_HANN_NORM))
+
+        var realp = [Float](repeating: 0.0, count: 256)
+        var imagp = [Float](repeating: 0.0, count: 256)
 
         for i in 0..<bucketCount {
-            let start = i * chunkSize
-            let slice = pcmSamples[start..<(start + chunkSize)]
-            var sumSq: Double = 0
-            for sample in slice {
-                let val = Double(sample) / 32768.0
-                sumSq += val * val
+            let start = i * samplesPerBucket
+            let end = min(start + 512, pcmSamples.count)
+            if end - start < 512 { break }
+
+            var input = [Float](repeating: 0.0, count: 512)
+            for k in 0..<512 {
+                input[k] = Float(pcmSamples[start + k]) / 32768.0
             }
-            floatBuckets[i] = Float(sqrt(sumSq / Double(chunkSize)))
+
+            // Apply Hann Window
+            vDSP_vmul(input, 1, window, 1, &input, 1, vDSP_Length(512))
+
+            // Pack into split complex structure for real-to-complex FFT
+            realp.withUnsafeMutableBufferPointer { rPtr in
+                imagp.withUnsafeMutableBufferPointer { iPtr in
+                    var splitComplex = DSPSplitComplex(realp: rPtr.baseAddress!, imagp: iPtr.baseAddress!)
+                    input.withUnsafeBufferPointer { inPtr in
+                        inPtr.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: 256) { complexPtr in
+                            vDSP_ctoz(complexPtr, 2, &splitComplex, 1, 256)
+                        }
+                    }
+
+                    // Perform Forward FFT via Accelerate
+                    vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(FFT_FORWARD))
+
+                    // Compute Magnitudes
+                    var magnitudes = [Float](repeating: 0.0, count: 256)
+                    vDSP_zvmags(&splitComplex, 1, &magnitudes, 1, 256)
+
+                    // Group 256 FFT magnitude bins into 8 frequency bands
+                    let bandsPerBucket = 8
+                    let binsPerBand = 32
+                    for b in 0..<bandsPerBucket {
+                        var bandEnergy: Float = 0.0
+                        let bandStart = b * binsPerBand
+                        vDSP_sve(Array(magnitudes[bandStart..<(bandStart + binsPerBand)]), 1, &bandEnergy, vDSP_Length(binsPerBand))
+                        featureVector[i * 8 + b] = log1p(bandEnergy)
+                    }
+                }
+            }
         }
 
-        return floatBuckets
+        return featureVector
     }
 
     private func vectorNorm(_ vector: [Float]) -> Float {
@@ -280,5 +326,6 @@ public final class RCDEngineService {
         vDSP_svesq(vector, 1, &sumSq, vDSP_Length(vector.count))
         return sqrt(sumSq)
     }
+
 }
 
