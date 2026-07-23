@@ -235,10 +235,11 @@ public final class FFmpegService {
                 "-i", url.path,
                 "-vframes", "1",
                 "-s", "160x90",
-                "-f", "image2",
+                "-f", "image2pipe",
                 "-c:v", "mjpeg",
                 "pipe:1"
             ]
+
 
             let pipe = Pipe()
             process.standardOutput = pipe

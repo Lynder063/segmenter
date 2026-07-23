@@ -195,6 +195,9 @@ public struct MainWindowView: View {
             let char = event.charactersIgnoringModifiers?.lowercased() ?? ""
 
             switch event.keyCode {
+            case 53: // Escape key clears text focus
+                NSApp.keyWindow?.makeFirstResponder(nil)
+                return nil
             case 49: // Space
                 togglePlay()
                 return nil
@@ -207,6 +210,7 @@ public struct MainWindowView: View {
             default:
                 break
             }
+
 
             switch char {
             case "i":
@@ -279,10 +283,12 @@ public struct MainWindowView: View {
         panel.allowedContentTypes = types
 
         if panel.runModal() == .OK, let rawUrl = panel.url {
+            NSApp.keyWindow?.makeFirstResponder(nil)
             // Set videoURL IMMEDIATELY — instant LibVLC 0ms playback start!
             self.videoURL = rawUrl
             self.statusMessage = "Loaded \(rawUrl.lastPathComponent)"
             LoggerService.shared.info("[UI] User opened video file with LibVLC engine: \(rawUrl.path)")
+
 
             // Auto-parse filename hints
             let hint = FilenameMediaParser.parse(filePathOrName: rawUrl.path)
