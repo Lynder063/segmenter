@@ -147,15 +147,19 @@ public struct FrameStripView: View {
             await withTaskGroup(of: (Int, Data?).self) { group in
                 for timeMs in missingTimes {
                     group.addTask {
+                        // 1. Try AVAssetImageGenerator first
                         let cmTime = CMTime(value: CMTimeValue(timeMs), timescale: 1000)
                         if let cgImage = try? generator.copyCGImage(at: cmTime, actualTime: nil) {
                             let rep = NSBitmapImageRep(cgImage: cgImage)
                             let data = rep.representation(using: .jpeg, properties: [:])
                             return (timeMs, data)
-                        } else if let ffImg = await FFmpegService.shared.extractThumbnail(url: url, timeMs: timeMs) {
-                            let data = ffImg.tiffRepresentation
+                        }
+
+                        // 2. Fast FFmpeg in-memory pipe fallback for MKV/x265 files
+                        if let data = await FFmpegService.shared.extractThumbnailData(url: url, timeMs: timeMs) {
                             return (timeMs, data)
                         }
+
                         return (timeMs, nil)
                     }
                 }
@@ -168,6 +172,7 @@ public struct FrameStripView: View {
                     }
                 }
             }
+
 
 
             await MainActor.run {

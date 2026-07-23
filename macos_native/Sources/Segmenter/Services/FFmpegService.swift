@@ -222,50 +222,42 @@ public final class FFmpegService {
         }.value
     }
 
-    // Extract fast 160x90 JPEG thumbnail at timeMs via ffmpeg
-    @MainActor
-    public func extractThumbnail(url: URL, timeMs: Int) async -> NSImage? {
+    // Extract fast 160x90 JPEG thumbnail Data at timeMs via ffmpeg stdout pipe (in-memory <0.02s)
+    public func extractThumbnailData(url: URL, timeMs: Int) async -> Data? {
         guard let ffmpeg = ffmpegPath else { return nil }
 
-
-        let imageData: Data? = await Task.detached(priority: .userInitiated) {
+        return await Task.detached(priority: .userInitiated) {
             let sec = Double(timeMs) / 1000.0
-            let tmpPath = "/tmp/thumb_\(abs(url.path.hashValue))_\(timeMs).jpg"
-
             let process = Process()
             process.executableURL = URL(fileURLWithPath: ffmpeg)
             process.arguments = [
-                "-y",
                 "-ss", String(format: "%.3f", sec),
                 "-i", url.path,
                 "-vframes", "1",
                 "-s", "160x90",
                 "-f", "image2",
-                tmpPath
+                "-c:v", "mjpeg",
+                "pipe:1"
             ]
 
-            process.standardOutput = Pipe()
+            let pipe = Pipe()
+            process.standardOutput = pipe
             process.standardError = Pipe()
 
             do {
                 try process.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
-                if process.terminationStatus == 0 && FileManager.default.fileExists(atPath: tmpPath),
-                   let data = try? Data(contentsOf: URL(fileURLWithPath: tmpPath)) {
-                    try? FileManager.default.removeItem(atPath: tmpPath)
+                if process.terminationStatus == 0 && !data.isEmpty {
                     return data
                 }
             } catch {
-                // Ignore error
+                LoggerService.shared.warn("[FFmpegService] Thumbnail extraction failed: \(error)")
             }
             return nil
         }.value
-
-        if let data = imageData {
-            return NSImage(data: data)
-        }
-        return nil
     }
+
 
 
 }
