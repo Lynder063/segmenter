@@ -384,20 +384,23 @@ public struct MainWindowView: View {
                     }
 
                     await MainActor.run {
-                        self.statusMessage = "Season scan complete! Found matches for \(results.count) episodes"
+                        self.statusMessage = "RCD Season scan complete! Detected intro/credits across \(results.count) episodes"
 
                         // Apply detected timestamps to current draft if current video matches
                         if let currentName = self.videoURL?.lastPathComponent,
-                           let matches = results[currentName], let first = matches.first {
-                            let startMs = Int(first.startSec * 1000.0)
-                            let endMs = Int(first.endSec * 1000.0)
-                            self.drafts[.intro] = SegmentDraft(startMs: startMs, endMs: endMs)
+                           let matches = results[currentName] {
+                            for match in matches {
+                                let startMs = Int(match.startSec * 1000.0)
+                                let endMs = Int(match.endSec * 1000.0)
+                                self.drafts[match.type] = SegmentDraft(startMs: startMs, endMs: endMs)
+                            }
                         }
                     }
                 } catch {
                     await MainActor.run {
                         self.statusMessage = "Season scan error: \(error.localizedDescription)"
                     }
+
                 }
             }
         }
