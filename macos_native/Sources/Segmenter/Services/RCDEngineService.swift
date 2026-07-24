@@ -1,6 +1,8 @@
 import Foundation
 import AVFoundation
 import Accelerate
+import Vision
+import AppKit
 
 public struct RCDMatch: Codable, Equatable {
     public let type: SegmentType
@@ -359,12 +361,19 @@ public final class RCDEngineService {
                     log(String(format: "  [%@] CREDITS: %02d:%02d - %02d:%02d (%.1f%%)", epName, Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, conf * 100))
                 }
 
-                results[epName] = matches
+                let finalMatches = await self.refineMatchesWithVisionAI(
+                    matches: matches,
+                    videoURL: video,
+                    method: method,
+                    log: log
+                )
+                results[epName] = finalMatches
             }
 
             log("Season scan complete — located per-episode segments across \(videoFiles.count) episodes!")
             progressHandler("RCD Season Fingerprinting Complete!", 100)
             return results
+
 
         }.value
     }
@@ -497,4 +506,114 @@ public final class RCDEngineService {
         return sqrt(sumSq)
     }
 
+    // MARK: - Apple Vision AI Framework Integration
+
+    /// Uses Apple's Vision framework (VNDetectTextRectanglesRequest) & luminance analysis
+    /// to detect credit text blocks and black frame transitions in video keyframes.
+    private func analyzeVisualCreditsWithVisionAI(
+        url: URL,
+        candidateStartSec: Double,
+        candidateEndSec: Double
+    ) async -> (textDensity: Float, blackFrameDetected: Bool) {
+        let sampleTimesSec = [
+            Int(candidateStartSec),
+            Int(candidateStartSec + 5.0),
+            Int(max(candidateStartSec, candidateEndSec - 5.0))
+        ]
+
+        var totalTextRects = 0
+        var foundBlackFrame = false
+
+        for timeSec in sampleTimesSec {
+            guard let jpegData = await FFmpegService.shared.extractThumbnailData(url: url, timeMs: timeSec * 1000),
+                  let nsImage = NSImage(data: jpegData),
+                  let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+                continue
+            }
+
+            // 1. Text Rectangle Detection via Apple Vision AI
+            let textRequest = VNDetectTextRectanglesRequest()
+            textRequest.reportCharacterBoxes = false
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            try? handler.perform([textRequest])
+
+            if let results = textRequest.results {
+                totalTextRects += results.count
+            }
+
+            // 2. Black Frame Luminance Check
+            let width = cgImage.width
+            let height = cgImage.height
+            if width > 0 && height > 0 {
+                let colorSpace = CGColorSpaceCreateDeviceGray()
+                var rawData = [UInt8](repeating: 0, count: width * height)
+                if let context = CGContext(
+                    data: &rawData,
+                    width: width,
+                    height: height,
+                    bitsPerComponent: 8,
+                    bytesPerRow: width,
+                    space: colorSpace,
+                    bitmapInfo: CGImageAlphaInfo.none.rawValue
+                ) {
+                    context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+                    var sumLuminance: Double = 0
+                    for px in rawData {
+                        sumLuminance += Double(px)
+                    }
+                    let avgLuminance = Float(sumLuminance / Double(rawData.count))
+                    if avgLuminance < 25.0 { // Average brightness threshold for black frame
+                        foundBlackFrame = true
+                    }
+
+                }
+            }
+        }
+
+        let textDensity = Float(totalTextRects) / Float(max(1, sampleTimesSec.count))
+        return (textDensity: textDensity, blackFrameDetected: foundBlackFrame)
+    }
+
+    /// Refines RCDMatch results using Apple Vision AI framework text recognition & visual analysis
+    private func refineMatchesWithVisionAI(
+        matches: [RCDMatch],
+        videoURL: URL,
+        method: RCDDetectionMethod,
+        log: (String) -> Void
+    ) async -> [RCDMatch] {
+        guard method == .appleHWAccelerated || method == .hybridFusion || method == .visualKeyframe else {
+            return matches
+        }
+
+        var refined: [RCDMatch] = []
+        for match in matches {
+            if match.type == .credits {
+                let (textDensity, blackFrame) = await analyzeVisualCreditsWithVisionAI(
+                    url: videoURL,
+                    candidateStartSec: match.startSec,
+                    candidateEndSec: match.endSec
+                )
+
+                var boostedConf = match.confidence
+                if textDensity > 3.0 {
+                    boostedConf = min(1.0, boostedConf + 0.12)
+                    log(String(format: "  [Vision AI] Detected scrolling credits text blocks (density: %.1f). Boosted confidence to %.1f%%", textDensity, boostedConf * 100))
+                }
+                if blackFrame {
+                    boostedConf = min(1.0, boostedConf + 0.08)
+                    log(String(format: "  [Vision AI] Black frame transition detected at credits start. Boosted confidence to %.1f%%", boostedConf * 100))
+                }
+
+                refined.append(RCDMatch(
+                    type: match.type,
+                    startSec: match.startSec,
+                    endSec: match.endSec,
+                    confidence: boostedConf
+                ))
+            } else {
+                refined.append(match)
+            }
+        }
+        return refined
+    }
 }
