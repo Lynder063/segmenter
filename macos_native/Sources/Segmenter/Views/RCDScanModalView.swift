@@ -2,10 +2,10 @@ import SwiftUI
 import AppKit
 
 public enum RCDDetectionMethod: String, CaseIterable, Identifiable {
-    case appleHWAccelerated = "Apple HW Accelerated (Metal + Accelerate SIMD)"
-    case audioChromagram = "Audio Spectrogram Chromagram Matching"
-    case visualKeyframe = "Visual Video Keyframe Histogram Matching"
-    case hybridFusion = "Hybrid Audio-Visual Fusion"
+    case appleHWAccelerated = "Apple HW Accelerated (vDSP SIMD + Vision AI)"
+    case audioChromagram = "Audio Spectrogram Chromagram (Chromaprint)"
+    case visualKeyframe = "Visual Apple Vision AI & Black Frame Analysis"
+    case hybridFusion = "Hybrid Multimodal AI Fusion (Audio + Vision AI)"
 
     public var id: String { rawValue }
 
@@ -21,16 +21,17 @@ public enum RCDDetectionMethod: String, CaseIterable, Identifiable {
     public var description: String {
         switch self {
         case .appleHWAccelerated:
-            return "Uses Apple Silicon M-series Neural Engine & Metal GPU vDSP SIMD for ultra-fast <1s correlation."
+            return "Accelerate SIMD 12-bin chromagram + Apple Vision AI text detection. Recommended default."
         case .audioChromagram:
-            return "Computes FFT spectral flatness and pitch chromagrams (best for musical intros)."
+            return "Pure 12-bin pitch chromagram cross-correlation (AcoustID / Chromaprint style). Ideal for music."
         case .visualKeyframe:
-            return "Decodes keyframes via VideoToolbox HW decoder and matches 3D HSV color histograms."
+            return "Apple Vision AI (VNDetectTextRectanglesRequest) OCR text detection + black frame transitions."
         case .hybridFusion:
-            return "Combines audio chromagram and visual keyframe histograms for 99.8% precision."
+            return "Multimodal AI fusion weighting 60% 12-bin audio chromagram + 40% Vision OCR text density."
         }
     }
 }
+
 
 public struct RCDScanModalView: View {
     @Binding var isPresented: Bool

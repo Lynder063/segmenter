@@ -625,39 +625,52 @@ public final class RCDEngineService {
         method: RCDDetectionMethod,
         log: (String) -> Void
     ) async -> [RCDMatch] {
-        guard method == .appleHWAccelerated || method == .hybridFusion || method == .visualKeyframe else {
+        switch method {
+        case .audioChromagram:
+            log("  [Method: Audio Chromagram] Using pure 12-bin pitch chromagram cross-correlation.")
             return matches
-        }
 
-        var refined: [RCDMatch] = []
-        for match in matches {
-            if match.type == .credits {
-                let (textDensity, blackFrame) = await analyzeVisualCreditsWithVisionAI(
-                    url: videoURL,
-                    candidateStartSec: match.startSec,
-                    candidateEndSec: match.endSec
-                )
+        case .appleHWAccelerated, .visualKeyframe, .hybridFusion:
+            log("  [Method: \(method.rawValue)] Running Apple Vision AI OCR text & luminance frame inspection...")
+            var refined: [RCDMatch] = []
 
-                var boostedConf = match.confidence
-                if textDensity > 3.0 {
-                    boostedConf = min(1.0, boostedConf + 0.12)
-                    log(String(format: "  [Vision AI] Detected scrolling credits text blocks (density: %.1f). Boosted confidence to %.1f%%", textDensity, boostedConf * 100))
+            for match in matches {
+                if match.type == .credits {
+                    let (textDensity, blackFrame) = await analyzeVisualCreditsWithVisionAI(
+                        url: videoURL,
+                        candidateStartSec: match.startSec,
+                        candidateEndSec: match.endSec
+                    )
+
+                    var boostedConf = match.confidence
+                    if method == .hybridFusion {
+                        // 60% Audio + 40% Vision AI score fusion
+                        let visionScore = min(1.0, (textDensity / 10.0) + (blackFrame ? 0.3 : 0.0))
+                        boostedConf = (0.60 * match.confidence) + (0.40 * visionScore)
+                        log(String(format: "  [Multimodal AI Fusion] Fused 60%% Audio (%.1f%%) + 40%% Vision AI (%.1f%%) -> Final: %.1f%%", match.confidence * 100, visionScore * 100, boostedConf * 100))
+                    } else {
+                        if textDensity > 3.0 {
+                            boostedConf = min(1.0, boostedConf + 0.12)
+                            log(String(format: "  [Vision AI] Detected scrolling credits text blocks (density: %.1f). Boosted confidence to %.1f%%", textDensity, boostedConf * 100))
+                        }
+                        if blackFrame {
+                            boostedConf = min(1.0, boostedConf + 0.08)
+                            log(String(format: "  [Vision AI] Black frame transition detected at credits start. Boosted confidence to %.1f%%", boostedConf * 100))
+                        }
+                    }
+
+                    refined.append(RCDMatch(
+                        type: match.type,
+                        startSec: match.startSec,
+                        endSec: match.endSec,
+                        confidence: boostedConf
+                    ))
+                } else {
+                    refined.append(match)
                 }
-                if blackFrame {
-                    boostedConf = min(1.0, boostedConf + 0.08)
-                    log(String(format: "  [Vision AI] Black frame transition detected at credits start. Boosted confidence to %.1f%%", boostedConf * 100))
-                }
-
-                refined.append(RCDMatch(
-                    type: match.type,
-                    startSec: match.startSec,
-                    endSec: match.endSec,
-                    confidence: boostedConf
-                ))
-            } else {
-                refined.append(match)
             }
+            return refined
         }
-        return refined
     }
 }
+
