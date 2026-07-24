@@ -62,3 +62,6 @@ dotnet-install.ps1
 macos_native/.build/
 macos/dist_native/
 macos/venv_mac/
+
+# Temporary research documentation
+rcd_research.md
