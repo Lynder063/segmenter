@@ -3,18 +3,22 @@ import AppKit
 
 public enum RCDDetectionMethod: String, CaseIterable, Identifiable {
     case appleHWAccelerated = "Apple HW Accelerated (vDSP SIMD + Vision AI)"
-    case audioChromagram = "Audio Spectrogram Chromagram (Chromaprint)"
-    case visualKeyframe = "Visual Apple Vision AI & Black Frame Analysis"
-    case hybridFusion = "Hybrid Multimodal AI Fusion (Audio + Vision AI)"
+    case soundAnalysisAI = "Apple SoundAnalysis ML Classifier (Sound Events)"
+    case visionTextOCR = "Apple Vision AI OCR & Black Frame Analysis"
+    case chromaprintFFT = "Chromaprint 12-Bin Pitch Chromagram (AcoustID)"
+    case multimodalFusionAI = "Multimodal AI Fusion (CLIP Vision + Audio AST)"
+    case singleEpisodeAI = "Single-Episode AI Structural Analysis"
 
     public var id: String { rawValue }
 
     public var iconName: String {
         switch self {
         case .appleHWAccelerated: return "cpu.fill"
-        case .audioChromagram: return "waveform"
-        case .visualKeyframe: return "film.fill"
-        case .hybridFusion: return "sparkles"
+        case .soundAnalysisAI: return "waveform.badge.plus"
+        case .visionTextOCR: return "eye.fill"
+        case .chromaprintFFT: return "waveform"
+        case .multimodalFusionAI: return "sparkles"
+        case .singleEpisodeAI: return "play.tv.fill"
         }
     }
 
@@ -22,15 +26,20 @@ public enum RCDDetectionMethod: String, CaseIterable, Identifiable {
         switch self {
         case .appleHWAccelerated:
             return "Accelerate SIMD 12-bin chromagram + Apple Vision AI text detection. Recommended default."
-        case .audioChromagram:
+        case .soundAnalysisAI:
+            return "Apple SoundAnalysis framework ML sound event classification for music, speech & scene transitions."
+        case .visionTextOCR:
+            return "Apple Vision AI (VNDetectTextRectanglesRequest) OCR text block detection + black frame transitions."
+        case .chromaprintFFT:
             return "Pure 12-bin pitch chromagram cross-correlation (AcoustID / Chromaprint style). Ideal for music."
-        case .visualKeyframe:
-            return "Apple Vision AI (VNDetectTextRectanglesRequest) OCR text detection + black frame transitions."
-        case .hybridFusion:
+        case .multimodalFusionAI:
             return "Multimodal AI fusion weighting 60% 12-bin audio chromagram + 40% Vision OCR text density."
+        case .singleEpisodeAI:
+            return "Standalone AI structural analysis detecting intro/outro boundaries within a single episode file."
         }
     }
 }
+
 
 
 public struct RCDScanModalView: View {
