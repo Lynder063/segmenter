@@ -485,7 +485,8 @@ public final class RCDEngineService {
     }
 
     /// Expands a seed matching window [seedStart, seedStart + seedWLen] backwards and forwards
-    /// frame-by-frame while local chroma correlation remains high (>= 0.35) to capture full intro/outro lengths.
+    /// with 1-second precision (~8 frames) while local chroma correlation remains high (>= 0.32).
+    /// Applies fine-tuned safety padding so skipping doesn't cut off first/last music notes.
     private func expandBoundaries(
         baseBuckets: [Float],
         epBuckets: [Float],
@@ -498,7 +499,7 @@ public final class RCDEngineService {
         let totalEpFrames = epBuckets.count / C
         let totalBaseFrames = baseBuckets.count / C
 
-        let win = 16 // 2-second check window for expansion (~16 frames)
+        let win = 8 // 1-second fine-tuning check window (~8 frames)
 
         // Expand backward
         while curStart >= win {
@@ -508,11 +509,11 @@ public final class RCDEngineService {
             let sliceB = Array(epBuckets[(testStart * C)..<((testStart + win) * C)])
             let normA = self.vectorNorm(sliceA)
             let normB = self.vectorNorm(sliceB)
-            if normA > 0.01 && normB > 0.01 {
+            if normA > 0.03 && normB > 0.03 {
                 var dot: Float = 0
                 vDSP_dotpr(sliceA, 1, sliceB, 1, &dot, vDSP_Length(win * C))
                 let sim = dot / (normA * normB)
-                if sim >= 0.35 {
+                if sim >= 0.32 {
                     curStart = testStart
                     continue
                 }
@@ -527,11 +528,11 @@ public final class RCDEngineService {
             let sliceB = Array(epBuckets[(curEnd * C)..<(testEnd * C)])
             let normA = self.vectorNorm(sliceA)
             let normB = self.vectorNorm(sliceB)
-            if normA > 0.01 && normB > 0.01 {
+            if normA > 0.03 && normB > 0.03 {
                 var dot: Float = 0
                 vDSP_dotpr(sliceA, 1, sliceB, 1, &dot, vDSP_Length(win * C))
                 let sim = dot / (normA * normB)
-                if sim >= 0.35 {
+                if sim >= 0.32 {
                     curEnd = testEnd
                     continue
                 }
@@ -539,7 +540,11 @@ public final class RCDEngineService {
             break
         }
 
-        return (curStart, curEnd)
+        // Apply fine-tuned 4-frame (~0.5s) boundary safety padding
+        let paddedStart = max(0, curStart - 4)
+        let paddedEnd = min(totalEpFrames, curEnd + 4)
+
+        return (paddedStart, paddedEnd)
     }
 
     /// Compute L2 norm of a feature vector using vDSP
@@ -552,21 +557,23 @@ public final class RCDEngineService {
 
     // MARK: - Apple Vision AI Framework Integration
 
-    /// Uses Apple's Vision framework (VNDetectTextRectanglesRequest) & luminance analysis
+    /// Uses Apple's Vision framework (VNDetectTextRectanglesRequest) & 5-frame luminance analysis
     /// to detect credit text blocks and black frame transitions in video keyframes.
     private func analyzeVisualCreditsWithVisionAI(
         url: URL,
         candidateStartSec: Double,
         candidateEndSec: Double
-    ) async -> (textDensity: Float, blackFrameDetected: Bool) {
+    ) async -> (textDensity: Float, blackFrameSec: Double?) {
         let sampleTimesSec = [
+            max(0, Int(candidateStartSec) - 1),
             Int(candidateStartSec),
-            Int(candidateStartSec + 5.0),
-            Int(max(candidateStartSec, candidateEndSec - 5.0))
+            Int(candidateStartSec + 3),
+            Int((candidateStartSec + candidateEndSec) / 2.0),
+            Int(max(candidateStartSec, candidateEndSec - 2.0))
         ]
 
         var totalTextRects = 0
-        var foundBlackFrame = false
+        var blackFrameSec: Double? = nil
 
         for timeSec in sampleTimesSec {
             guard let jpegData = await FFmpegService.shared.extractThumbnailData(url: url, timeMs: timeSec * 1000),
@@ -575,7 +582,7 @@ public final class RCDEngineService {
                 continue
             }
 
-            // 1. Text Rectangle Detection via Apple Vision AI
+            // 1. Text Rectangle Detection via Apple Vision AI OCR
             let textRequest = VNDetectTextRectanglesRequest()
             textRequest.reportCharacterBoxes = false
             let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
@@ -585,7 +592,7 @@ public final class RCDEngineService {
                 totalTextRects += results.count
             }
 
-            // 2. Black Frame Luminance Check
+            // 2. Fine-Tuned Black Frame Luminance & Contrast Check
             let width = cgImage.width
             let height = cgImage.height
             if width > 0 && height > 0 {
@@ -606,16 +613,15 @@ public final class RCDEngineService {
                         sumLuminance += Double(px)
                     }
                     let avgLuminance = Float(sumLuminance / Double(rawData.count))
-                    if avgLuminance < 25.0 { // Average brightness threshold for black frame
-                        foundBlackFrame = true
+                    if avgLuminance < 30.0 && blackFrameSec == nil { // Average brightness threshold (< 30/255)
+                        blackFrameSec = Double(timeSec)
                     }
-
                 }
             }
         }
 
         let textDensity = Float(totalTextRects) / Float(max(1, sampleTimesSec.count))
-        return (textDensity: textDensity, blackFrameDetected: foundBlackFrame)
+        return (textDensity: textDensity, blackFrameSec: blackFrameSec)
     }
 
     /// Refines RCDMatch results using Apple Vision AI framework text recognition & visual analysis
@@ -655,32 +661,40 @@ public final class RCDEngineService {
 
             for match in matches {
                 if match.type == .credits {
-                    let (textDensity, blackFrame) = await analyzeVisualCreditsWithVisionAI(
+                    let (textDensity, blackFrameSec) = await analyzeVisualCreditsWithVisionAI(
                         url: videoURL,
                         candidateStartSec: match.startSec,
                         candidateEndSec: match.endSec
                     )
 
                     var boostedConf = match.confidence
+                    var tunedStartSec = match.startSec
+
+                    // Snap credit start timestamp to black frame transition if found within 3s
+                    if let bfSec = blackFrameSec, abs(bfSec - match.startSec) <= 4.0 {
+                        tunedStartSec = bfSec
+                        log(String(format: "  [Vision AI Fine-Tuning] Snapped credits start to visual black frame at %02d:%02d", Int(bfSec)/60, Int(bfSec)%60))
+                    }
+
                     if method == .multimodalFusionAI {
                         // 60% Audio + 40% Vision AI score fusion
-                        let visionScore = min(1.0, (textDensity / 10.0) + (blackFrame ? 0.3 : 0.0))
+                        let visionScore = min(1.0, (textDensity / 8.0) + (blackFrameSec != nil ? 0.35 : 0.0))
                         boostedConf = (0.60 * match.confidence) + (0.40 * visionScore)
                         log(String(format: "  [Multimodal AI Fusion] Fused 60%% Audio (%.1f%%) + 40%% Vision AI (%.1f%%) -> Final: %.1f%%", match.confidence * 100, visionScore * 100, boostedConf * 100))
                     } else {
-                        if textDensity > 3.0 {
-                            boostedConf = min(1.0, boostedConf + 0.12)
-                            log(String(format: "  [Vision AI] Detected scrolling credits text blocks (density: %.1f). Boosted confidence to %.1f%%", textDensity, boostedConf * 100))
+                        if textDensity > 2.5 {
+                            boostedConf = min(1.0, boostedConf + 0.15)
+                            log(String(format: "  [Vision AI Fine-Tuning] Detected scrolling credit text blocks (density: %.1f). Boosted confidence to %.1f%%", textDensity, boostedConf * 100))
                         }
-                        if blackFrame {
-                            boostedConf = min(1.0, boostedConf + 0.08)
-                            log(String(format: "  [Vision AI] Black frame transition detected at credits start. Boosted confidence to %.1f%%", boostedConf * 100))
+                        if blackFrameSec != nil {
+                            boostedConf = min(1.0, boostedConf + 0.10)
+                            log(String(format: "  [Vision AI Fine-Tuning] Black frame transition verified. Boosted confidence to %.1f%%", boostedConf * 100))
                         }
                     }
 
                     refined.append(RCDMatch(
                         type: match.type,
-                        startSec: match.startSec,
+                        startSec: tunedStartSec,
                         endSec: match.endSec,
                         confidence: boostedConf
                     ))
@@ -691,6 +705,7 @@ public final class RCDEngineService {
             return refined
         }
     }
+
 }
 
 
