@@ -122,150 +122,114 @@ public final class RCDEngineService {
             let C = 12              // chroma bins per frame
             let secPerFrame = 0.128 // each frame = hopSize/sampleRate = 512/4000
 
-            // 3. Find repeating INTRO pattern by cross-correlating first-5-min chroma across episodes
-            let sampleEpisodes = Array(videoFiles.prefix(5))
+            // 3. Find repeating INTRO & CREDITS patterns by cross-correlating audio across sample episodes
+            let sampleEpisodes = Array(videoFiles.prefix(min(5, videoFiles.count)))
             let targetThresh = Float(similarityThreshold)
 
-            // Window lengths in frames (~8 fps): 20s≈156, 30s≈234, 45s≈352, 60s≈469
-            let introWindowLengths = [156, 234, 352, 469]
-            let creditsWindowLengths = [156, 234, 352, 469]
+            // Window lengths in frames (~8.0 fps): 10s=78, 15s=117, 20s=156, 30s=234, 45s=352, 60s=469, 90s=703
+            let introWindowLengths = [78, 117, 156, 234, 352, 469, 703]
+            let creditsWindowLengths = [78, 117, 156, 234, 352, 469, 703]
 
             var bestIntroTemplate: (startBucket: Int, wLen: Int, score: Float, baseName: String)?
             var bestCreditsTemplate: (startBucket: Int, wLen: Int, score: Float, baseName: String)?
 
-            // --- INTRO template detection ---
-            if let baseName = sampleEpisodes.first?.lastPathComponent,
-               let baseAudio = episodeAudio[baseName] {
+            // Helper function to find best template across sample episodes with adaptive thresholding
+            func findBestTemplate(isIntro: Bool) -> (startBucket: Int, wLen: Int, score: Float, baseName: String)? {
+                let windowLengths = isIntro ? introWindowLengths : creditsWindowLengths
+                let thresholdsToTry: [Float] = [targetThresh, 0.65, 0.50, 0.40]
 
-                let baseBuckets = baseAudio.introFeatures
-                let totalFrames = baseBuckets.count / C
+                for minThresh in thresholdsToTry {
+                    var bestForThresh: (startBucket: Int, wLen: Int, score: Float, baseName: String)?
 
-                for wLen in introWindowLengths {
-                    guard totalFrames > wLen else { continue }
+                    for baseEp in sampleEpisodes {
+                        let baseName = baseEp.lastPathComponent
+                        guard let baseAudio = episodeAudio[baseName] else { continue }
+                        let baseBuckets = isIntro ? baseAudio.introFeatures : baseAudio.creditsFeatures
+                        let totalFrames = baseBuckets.count / C
 
-                    for startIdx in stride(from: 0, to: totalFrames - wLen, by: 8) {
-                        let sliceA = Array(baseBuckets[(startIdx * C)..<((startIdx + wLen) * C)])
-                        let normA = self.vectorNorm(sliceA)
-                        guard normA > 0.01 else { continue }
+                        for wLen in windowLengths {
+                            guard totalFrames > wLen else { continue }
 
-                        var matchCount = 0
-                        var totalScore: Float = 0
+                            for startIdx in stride(from: 0, to: totalFrames - wLen, by: 4) {
+                                let sliceA = Array(baseBuckets[(startIdx * C)..<((startIdx + wLen) * C)])
+                                let normA = self.vectorNorm(sliceA)
+                                guard normA > 0.01 else { continue }
 
-                        for ep in sampleEpisodes.dropFirst() {
-                            guard let epAudio = episodeAudio[ep.lastPathComponent] else { continue }
-                            let epBuckets = epAudio.introFeatures
-                            let epTotal = epBuckets.count / C
-                            var bestSim: Float = 0
+                                var matchCount = 0
+                                var totalScore: Float = 0
 
-                            // Search within +-60s window (~469 frames)
-                            let searchStart = max(0, startIdx - 469)
-                            let searchEnd = min(max(0, epTotal - wLen), startIdx + 469)
+                                for otherEp in sampleEpisodes where otherEp.lastPathComponent != baseName {
+                                    guard let epAudio = episodeAudio[otherEp.lastPathComponent] else { continue }
+                                    let epBuckets = isIntro ? epAudio.introFeatures : epAudio.creditsFeatures
+                                    let epTotal = epBuckets.count / C
+                                    var bestSim: Float = 0
 
-                            if searchEnd > searchStart {
-                                for targetIdx in stride(from: searchStart, to: searchEnd, by: 8) {
-                                    let end = (targetIdx + wLen) * C
-                                    guard end <= epBuckets.count else { break }
-                                    let sliceB = Array(epBuckets[(targetIdx * C)..<end])
-                                    let normB = self.vectorNorm(sliceB)
-                                    if normB > 0.01 {
-                                        var dot: Float = 0
-                                        vDSP_dotpr(sliceA, 1, sliceB, 1, &dot, vDSP_Length(wLen * C))
-                                        let sim = dot / (normA * normB)
-                                        if sim > bestSim { bestSim = sim }
+                                    let searchMax = max(0, epTotal - wLen)
+                                    if searchMax > 0 {
+                                        for targetIdx in stride(from: 0, to: searchMax, by: 4) {
+                                            let end = (targetIdx + wLen) * C
+                                            guard end <= epBuckets.count else { break }
+                                            let sliceB = Array(epBuckets[(targetIdx * C)..<end])
+                                            let normB = self.vectorNorm(sliceB)
+                                            if normB > 0.01 {
+                                                var dot: Float = 0
+                                                vDSP_dotpr(sliceA, 1, sliceB, 1, &dot, vDSP_Length(wLen * C))
+                                                let sim = dot / (normA * normB)
+                                                if sim > bestSim { bestSim = sim }
+                                            }
+                                        }
+                                    }
+
+                                    if bestSim >= minThresh {
+                                        matchCount += 1
+                                        totalScore += bestSim
+                                    }
+                                }
+
+                                if matchCount >= max(1, (sampleEpisodes.count - 1) / 2) {
+                                    let avgScore = totalScore / Float(matchCount)
+                                    if bestForThresh == nil || avgScore > bestForThresh!.score {
+                                        bestForThresh = (startBucket: startIdx, wLen: wLen, score: avgScore, baseName: baseName)
                                     }
                                 }
                             }
-
-                            if bestSim >= targetThresh {
-                                matchCount += 1
-                                totalScore += bestSim
-                            }
-                        }
-
-                        if matchCount >= max(1, sampleEpisodes.count - 2) {
-                            let avgScore = totalScore / Float(matchCount)
-                            if bestIntroTemplate == nil || avgScore > bestIntroTemplate!.score {
-                                bestIntroTemplate = (startBucket: startIdx, wLen: wLen, score: avgScore, baseName: baseName)
-                            }
                         }
                     }
+
+                    if let found = bestForThresh {
+                        if minThresh < targetThresh {
+                            log(String(format: "Adaptive threshold fallback used: %.0f%% for \(isIntro ? "INTRO" : "CREDITS")", minThresh * 100))
+                        }
+                        return found
+                    }
                 }
+
+                return nil
             }
+
+            // --- INTRO template detection ---
+            bestIntroTemplate = findBestTemplate(isIntro: true)
 
             progressHandler("Cross-correlating credits fingerprints...", 60)
             log("Phase 3: Cross-correlating credits chroma vectors across episodes...")
 
             // --- CREDITS template detection ---
-            if let baseName = sampleEpisodes.first?.lastPathComponent,
-               let baseAudio = episodeAudio[baseName] {
-
-                let baseBuckets = baseAudio.creditsFeatures
-                let totalFrames = baseBuckets.count / C
-
-                for wLen in creditsWindowLengths {
-                    guard totalFrames > wLen else { continue }
-
-                    for startIdx in stride(from: 0, to: totalFrames - wLen, by: 8) {
-                        let sliceA = Array(baseBuckets[(startIdx * C)..<((startIdx + wLen) * C)])
-                        let normA = self.vectorNorm(sliceA)
-                        guard normA > 0.01 else { continue }
-
-                        var matchCount = 0
-                        var totalScore: Float = 0
-
-                        for ep in sampleEpisodes.dropFirst() {
-                            guard let epAudio = episodeAudio[ep.lastPathComponent] else { continue }
-                            let epBuckets = epAudio.creditsFeatures
-                            let epTotal = epBuckets.count / C
-                            var bestSim: Float = 0
-
-                            let searchStart = max(0, startIdx - 469)
-                            let searchEnd = min(max(0, epTotal - wLen), startIdx + 469)
-
-                            if searchEnd > searchStart {
-                                for targetIdx in stride(from: searchStart, to: searchEnd, by: 8) {
-                                    let end = (targetIdx + wLen) * C
-                                    guard end <= epBuckets.count else { break }
-                                    let sliceB = Array(epBuckets[(targetIdx * C)..<end])
-                                    let normB = self.vectorNorm(sliceB)
-                                    if normB > 0.01 {
-                                        var dot: Float = 0
-                                        vDSP_dotpr(sliceA, 1, sliceB, 1, &dot, vDSP_Length(wLen * C))
-                                        let sim = dot / (normA * normB)
-                                        if sim > bestSim { bestSim = sim }
-                                    }
-                                }
-                            }
-
-                            if bestSim >= targetThresh {
-                                matchCount += 1
-                                totalScore += bestSim
-                            }
-                        }
-
-                        if matchCount >= max(1, sampleEpisodes.count - 2) {
-                            let avgScore = totalScore / Float(matchCount)
-                            if bestCreditsTemplate == nil || avgScore > bestCreditsTemplate!.score {
-                                bestCreditsTemplate = (startBucket: startIdx, wLen: wLen, score: avgScore, baseName: baseName)
-                            }
-                        }
-                    }
-                }
-            }
+            bestCreditsTemplate = findBestTemplate(isIntro: false)
 
             // Log discovered templates
             if let t = bestIntroTemplate {
                 let s = Double(t.startBucket) * secPerFrame, e = Double(t.startBucket + t.wLen) * secPerFrame
-                log(String(format: "INTRO template found in first 5 min: %02d:%02d - %02d:%02d (%.1f%%)", Int(s)/60, Int(s)%60, Int(e)/60, Int(e)%60, t.score * 100))
+                log(String(format: "INTRO template found in first 5 min: %02d:%02d - %02d:%02d (confidence: %.1f%%, base: %@)", Int(s)/60, Int(s)%60, Int(e)/60, Int(e)%60, t.score * 100, t.baseName))
             } else {
-                log("No INTRO template found above threshold")
+                log("No INTRO template found across episodes")
             }
             if let t = bestCreditsTemplate {
                 let s = Double(t.startBucket) * secPerFrame, e = Double(t.startBucket + t.wLen) * secPerFrame
-                log(String(format: "CREDITS template found in last 5 min: %02d:%02d - %02d:%02d offset (%.1f%%)", Int(s)/60, Int(s)%60, Int(e)/60, Int(e)%60, t.score * 100))
+                log(String(format: "CREDITS template found in last 5 min: %02d:%02d - %02d:%02d offset (confidence: %.1f%%, base: %@)", Int(s)/60, Int(s)%60, Int(e)/60, Int(e)%60, t.score * 100, t.baseName))
             } else {
-                log("No CREDITS template found above threshold")
+                log("No CREDITS template found across episodes")
             }
+
 
             progressHandler("Locating per-episode segment positions...", 75)
 
