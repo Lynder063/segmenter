@@ -139,7 +139,7 @@ public final class RCDEngineService {
                 let thresholdsToTry: [Float] = [targetThresh, 0.65, 0.50, 0.40]
 
                 for minThresh in thresholdsToTry {
-                    var bestForThresh: (startBucket: Int, wLen: Int, score: Float, baseName: String)?
+                    var bestForThresh: (startBucket: Int, wLen: Int, score: Float, baseName: String, weightedScore: Float)?
 
                     for baseEp in sampleEpisodes {
                         let baseName = baseEp.lastPathComponent
@@ -188,8 +188,12 @@ public final class RCDEngineService {
 
                                 if matchCount >= max(1, (sampleEpisodes.count - 1) / 2) {
                                     let avgScore = totalScore / Float(matchCount)
-                                    if bestForThresh == nil || avgScore > bestForThresh!.score {
-                                        bestForThresh = (startBucket: startIdx, wLen: wLen, score: avgScore, baseName: baseName)
+                                    // Weight score by window duration so full 45s-90s intros win over tiny 10s snippets
+                                    let durationWeight = sqrt(Float(wLen) * Float(secPerFrame) / 30.0)
+                                    let weightedScore = avgScore * durationWeight
+
+                                    if bestForThresh == nil || weightedScore > bestForThresh!.weightedScore {
+                                        bestForThresh = (startBucket: startIdx, wLen: wLen, score: avgScore, baseName: baseName, weightedScore: weightedScore)
                                     }
                                 }
                             }
@@ -200,7 +204,7 @@ public final class RCDEngineService {
                         if minThresh < targetThresh {
                             log(String(format: "Adaptive threshold fallback used: %.0f%% for \(isIntro ? "INTRO" : "CREDITS")", minThresh * 100))
                         }
-                        return found
+                        return (startBucket: found.startBucket, wLen: found.wLen, score: found.score, baseName: found.baseName)
                     }
                 }
 
@@ -230,10 +234,9 @@ public final class RCDEngineService {
                 log("No CREDITS template found across episodes")
             }
 
-
             progressHandler("Locating per-episode segment positions...", 75)
 
-            // 4. For each episode, locate exact intro/credits position by sliding the template
+            // 4. For each episode, locate exact intro/credits position by sliding the template & expanding boundaries
             var results: [String: [RCDMatch]] = [:]
 
             for (epIdx, video) in videoFiles.enumerated() {
@@ -278,9 +281,17 @@ public final class RCDEngineService {
                         }
                     }
 
-                    // startSec/endSec are absolute times (intro is from start of video)
-                    let startSec = Double(bestStart) * secPerFrame
-                    let endSec = Double(bestStart + t.wLen) * secPerFrame
+                    // Expand boundaries forward/backward to capture the full intro length
+                    let (expStart, expEnd) = self.expandBoundaries(
+                        baseBuckets: baseBuckets,
+                        epBuckets: epBuckets,
+                        seedStart: bestStart,
+                        seedWLen: t.wLen,
+                        C: C
+                    )
+
+                    let startSec = Double(expStart) * secPerFrame
+                    let endSec = Double(expEnd) * secPerFrame
                     let conf = bestSim > 0 ? bestSim : t.score
                     matches.append(RCDMatch(type: .intro, startSec: startSec, endSec: endSec, confidence: conf))
                     log(String(format: "  [%@] INTRO: %02d:%02d - %02d:%02d (%.1f%%)", epName, Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, conf * 100))
@@ -316,14 +327,24 @@ public final class RCDEngineService {
                         }
                     }
 
+                    // Expand boundaries forward/backward to capture full credits length
+                    let (expStart, expEnd) = self.expandBoundaries(
+                        baseBuckets: baseBuckets,
+                        epBuckets: epBuckets,
+                        seedStart: bestStart,
+                        seedWLen: t.wLen,
+                        C: C
+                    )
+
                     // Convert offset within last-5-min segment to absolute time
                     let creditsStartOffset = max(0, epAudio.durationSec - creditsExtractSec)
-                    let startSec = Double(creditsStartOffset) + Double(bestStart) * secPerFrame
-                    let endSec = Double(creditsStartOffset) + Double(bestStart + t.wLen) * secPerFrame
+                    let startSec = Double(creditsStartOffset) + Double(expStart) * secPerFrame
+                    let endSec = Double(creditsStartOffset) + Double(expEnd) * secPerFrame
                     let conf = bestSim > 0 ? bestSim : t.score
                     matches.append(RCDMatch(type: .credits, startSec: startSec, endSec: endSec, confidence: conf))
                     log(String(format: "  [%@] CREDITS: %02d:%02d - %02d:%02d (%.1f%%)", epName, Int(startSec)/60, Int(startSec)%60, Int(endSec)/60, Int(endSec)%60, conf * 100))
                 }
+
 
                 let finalMatches = await self.refineMatchesWithVisionAI(
                     matches: matches,
@@ -463,12 +484,71 @@ public final class RCDEngineService {
         return featureVector
     }
 
+    /// Expands a seed matching window [seedStart, seedStart + seedWLen] backwards and forwards
+    /// frame-by-frame while local chroma correlation remains high (>= 0.35) to capture full intro/outro lengths.
+    private func expandBoundaries(
+        baseBuckets: [Float],
+        epBuckets: [Float],
+        seedStart: Int,
+        seedWLen: Int,
+        C: Int
+    ) -> (startFrame: Int, endFrame: Int) {
+        var curStart = seedStart
+        var curEnd = seedStart + seedWLen
+        let totalEpFrames = epBuckets.count / C
+        let totalBaseFrames = baseBuckets.count / C
+
+        let win = 16 // 2-second check window for expansion (~16 frames)
+
+        // Expand backward
+        while curStart >= win {
+            let testStart = curStart - win
+            guard testStart * C + win * C <= baseBuckets.count && testStart * C + win * C <= epBuckets.count else { break }
+            let sliceA = Array(baseBuckets[(testStart * C)..<((testStart + win) * C)])
+            let sliceB = Array(epBuckets[(testStart * C)..<((testStart + win) * C)])
+            let normA = self.vectorNorm(sliceA)
+            let normB = self.vectorNorm(sliceB)
+            if normA > 0.01 && normB > 0.01 {
+                var dot: Float = 0
+                vDSP_dotpr(sliceA, 1, sliceB, 1, &dot, vDSP_Length(win * C))
+                let sim = dot / (normA * normB)
+                if sim >= 0.35 {
+                    curStart = testStart
+                    continue
+                }
+            }
+            break
+        }
+
+        // Expand forward
+        while curEnd + win <= totalEpFrames && curEnd + win <= totalBaseFrames {
+            let testEnd = curEnd + win
+            let sliceA = Array(baseBuckets[(curEnd * C)..<(testEnd * C)])
+            let sliceB = Array(epBuckets[(curEnd * C)..<(testEnd * C)])
+            let normA = self.vectorNorm(sliceA)
+            let normB = self.vectorNorm(sliceB)
+            if normA > 0.01 && normB > 0.01 {
+                var dot: Float = 0
+                vDSP_dotpr(sliceA, 1, sliceB, 1, &dot, vDSP_Length(win * C))
+                let sim = dot / (normA * normB)
+                if sim >= 0.35 {
+                    curEnd = testEnd
+                    continue
+                }
+            }
+            break
+        }
+
+        return (curStart, curEnd)
+    }
+
     /// Compute L2 norm of a feature vector using vDSP
     private func vectorNorm(_ vector: [Float]) -> Float {
         var sumSq: Float = 0
         vDSP_svesq(vector, 1, &sumSq, vDSP_Length(vector.count))
         return sqrt(sumSq)
     }
+
 
     // MARK: - Apple Vision AI Framework Integration
 
