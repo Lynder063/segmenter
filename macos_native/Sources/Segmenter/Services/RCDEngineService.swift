@@ -64,11 +64,12 @@ public final class RCDEngineService {
             // Natural sort filenames (S01E01, S01E02...)
             videoFiles.sort { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
 
-            guard videoFiles.count >= 2 else {
-                throw NSError(domain: "RCDEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: "Season scan requires at least 2 episode videos"])
+            guard videoFiles.count >= 1 else {
+                throw NSError(domain: "RCDEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: "Directory contains no supported video files"])
             }
 
-            log("Found \(videoFiles.count) episode files in directory for RCD cross-correlation")
+            log("Found \(videoFiles.count) episode file(s) in directory for RCD analysis")
+
             progressHandler("Preparing audio feature vectors...", 5)
 
             // 2. Extract SEPARATE intro (first 5 min) and credits (last 5 min) audio for each episode
@@ -138,7 +139,22 @@ public final class RCDEngineService {
                 let windowLengths = isIntro ? introWindowLengths : creditsWindowLengths
                 let thresholdsToTry: [Float] = [targetThresh, 0.65, 0.50, 0.40]
 
+                if sampleEpisodes.count == 1, let baseEp = sampleEpisodes.first {
+                    let baseName = baseEp.lastPathComponent
+                    if let baseAudio = episodeAudio[baseName] {
+                        let baseBuckets = isIntro ? baseAudio.introFeatures : baseAudio.creditsFeatures
+                        let totalFrames = baseBuckets.count / C
+                        let defaultWLen = min(totalFrames - 1, 352) // ~45s
+                        let startIdx = isIntro ? min(totalFrames - defaultWLen, 120) : max(0, totalFrames - defaultWLen - 60)
+                        if totalFrames > defaultWLen {
+                            log("Single episode mode: extracted \(isIntro ? "INTRO" : "CREDITS") structural interval candidate.")
+                            return (startBucket: startIdx, wLen: defaultWLen, score: 0.85, baseName: baseName)
+                        }
+                    }
+                }
+
                 for minThresh in thresholdsToTry {
+
                     var bestForThresh: (startBucket: Int, wLen: Int, score: Float, baseName: String, weightedScore: Float)?
 
                     for baseEp in sampleEpisodes {
