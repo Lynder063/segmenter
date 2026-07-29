@@ -106,7 +106,14 @@ public actor TheIntroDBClient {
             if (200...299).contains(httpResponse.statusCode) {
                 return (data, httpResponse, usage)
             } else {
-                let errMsg = String(data: data, encoding: .utf8) ?? "HTTP status \(httpResponse.statusCode)"
+                var errMsg = "HTTP status \(httpResponse.statusCode)"
+                if let jsonErr = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    if let msg = (jsonErr["error"] as? String) ?? (jsonErr["message"] as? String) {
+                        errMsg = msg
+                    }
+                } else if let rawStr = String(data: data, encoding: .utf8), !rawStr.isEmpty {
+                    errMsg = rawStr
+                }
                 throw APIClientError.httpError(statusCode: httpResponse.statusCode, message: errMsg, usage: usage)
             }
         } catch let err as APIClientError {
@@ -115,6 +122,7 @@ public actor TheIntroDBClient {
             throw APIClientError.requestFailed(error.localizedDescription)
         }
     }
+
 }
 
 // MARK: - IntroDB Client

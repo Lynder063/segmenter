@@ -489,47 +489,112 @@ public struct MainWindowView: View {
     private func uploadAllDrafts() {
         let keyToUse = theIntroDBKey.trimmingCharacters(in: .whitespaces)
         guard !keyToUse.isEmpty else {
-            statusMessage = "Error: TheIntroDB API key is missing. Set API key in sidebar."
+            statusMessage = "Error: TheIntroDB API key is missing. Set your API Key in sidebar."
             return
         }
 
         guard let tmdbInt = Int(tmdbId.trimmingCharacters(in: .whitespaces)) else {
-            statusMessage = "Error: Valid TMDB ID is required for submission"
+            statusMessage = "Error: Valid numeric TMDB ID is required for submission"
             return
         }
 
-        statusMessage = "Submitting segments to TheIntroDB..."
-        let client = TheIntroDBClient()
+        let isTV = mediaType == .tv
+        let sNum = Int(season.trimmingCharacters(in: .whitespaces))
+        let eNum = Int(episode.trimmingCharacters(in: .whitespaces))
 
-        var payload: [String: Any] = [
-            "tmdb_id": tmdbInt,
-            "media_type": mediaType.rawValue
-        ]
-        if let s = Int(season.trimmingCharacters(in: .whitespaces)) { payload["season"] = s }
-        if let e = Int(episode.trimmingCharacters(in: .whitespaces)) { payload["episode"] = e }
-        if !imdbId.isEmpty { payload["imdb_id"] = imdbId.trimmingCharacters(in: .whitespaces) }
-
-        var segDict: [String: Any] = [:]
-        for (type, draft) in drafts {
-            if let start = draft.startMs, let end = draft.endMs, end > start {
-                segDict[type.rawValue] = ["start_ms": start, "end_ms": end]
+        if isTV {
+            guard sNum != nil && eNum != nil else {
+                statusMessage = "Error: Season and Episode numbers are required for TV submissions"
+                return
             }
         }
-        payload["segments"] = segDict
+
+        var itemPayloads: [[String: Any]] = []
+
+        for (type, draft) in drafts {
+            guard !draft.isEmpty else { continue }
+
+            var payload: [String: Any] = [
+                "tmdb_id": tmdbInt,
+                "type": isTV ? "tv" : "movie",
+                "segment": type.rawValue
+            ]
+
+            if isTV {
+                if let s = sNum { payload["season"] = s }
+                if let e = eNum { payload["episode"] = e }
+            }
+
+            // Apply v3 segment validation rules
+            switch type {
+            case .intro, .recap:
+                // end_ms is required for intro/recap
+                guard let end = draft.endMs else { continue }
+                payload["end_ms"] = end
+                if let start = draft.startMs {
+                    payload["start_ms"] = start
+                } else {
+                    payload["start_ms"] = NSNull()
+                }
+
+            case .credits, .preview:
+                // start_ms is required for credits/preview
+                guard let start = draft.startMs else { continue }
+                payload["start_ms"] = start
+                if let end = draft.endMs {
+                    payload["end_ms"] = end
+                } else {
+                    payload["end_ms"] = NSNull()
+                }
+            }
+
+            // Include video_duration_ms as required by user and v3 spec!
+            if durationMs > 0 {
+                payload["video_duration_ms"] = durationMs
+            }
+
+            let cleanedImdb = imdbId.trimmingCharacters(in: .whitespaces)
+            if !cleanedImdb.isEmpty {
+                payload["imdb_id"] = cleanedImdb
+            }
+
+            itemPayloads.append(payload)
+        }
+
+        guard !itemPayloads.isEmpty else {
+            statusMessage = "No valid segments ready for submission (Intro/Recap requires End time; Credits/Preview requires Start time)"
+            return
+        }
+
+        statusMessage = "Submitting \(itemPayloads.count) segment(s) to TheIntroDB v3 API..."
+        let client = TheIntroDBClient()
 
         Task {
-            do {
-                let (_, _) = try await client.submit(requestBody: payload, apiKey: keyToUse)
-                await MainActor.run {
-                    self.statusMessage = "Successfully submitted segments to TheIntroDB!"
+            var successCount = 0
+            var errors: [String] = []
+
+            for payload in itemPayloads {
+                let segName = (payload["segment"] as? String)?.capitalized ?? "Segment"
+                do {
+                    let (_, _) = try await client.submit(requestBody: payload, apiKey: keyToUse)
+                    successCount += 1
+                } catch {
+                    errors.append("\(segName): \(error.localizedDescription)")
                 }
-            } catch {
-                await MainActor.run {
-                    self.statusMessage = "Submission Error: \(error.localizedDescription)"
+            }
+
+            await MainActor.run {
+                if errors.isEmpty {
+                    self.statusMessage = "🎉 Successfully submitted \(successCount) segment(s) to TheIntroDB!"
+                } else if successCount > 0 {
+                    self.statusMessage = "Submitted \(successCount) segment(s). Errors: \(errors.joined(separator: "; "))"
+                } else {
+                    self.statusMessage = "Submission Failed: \(errors.joined(separator: "; "))"
                 }
             }
         }
     }
+
 
 
     private func scanSeason() {
