@@ -192,22 +192,27 @@ public struct MainWindowView: View {
 
     private func setupKeyboardMonitor() {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let isShift = event.modifierFlags.contains(.shift)
+            let char = event.charactersIgnoringModifiers?.lowercased() ?? ""
+
+            // Handle Escape (53) & Return (36) unconditionally to unfocus text inputs
+            if event.keyCode == 53 || event.keyCode == 36 {
+                NSApp.keyWindow?.makeFirstResponder(nil)
+                return nil
+            }
+
             if let firstResponder = NSApp.keyWindow?.firstResponder,
                firstResponder is NSTextView || firstResponder is NSTextField {
-                if event.keyCode == 53 || event.keyCode == 36 { // Escape (53) or Return (36)
+                // If user presses Space bar (49) while a text field has focus, automatically unfocus and toggle playback!
+                if event.keyCode == 49 {
                     NSApp.keyWindow?.makeFirstResponder(nil)
+                    togglePlay()
                     return nil
                 }
                 return event
             }
 
-            let isShift = event.modifierFlags.contains(.shift)
-            let char = event.charactersIgnoringModifiers?.lowercased() ?? ""
-
             switch event.keyCode {
-            case 53: // Escape key clears text focus
-                NSApp.keyWindow?.makeFirstResponder(nil)
-                return nil
             case 49: // Space
                 togglePlay()
                 return nil
@@ -220,7 +225,6 @@ public struct MainWindowView: View {
             default:
                 break
             }
-
 
             switch char {
             case "i":
@@ -246,6 +250,7 @@ public struct MainWindowView: View {
             }
         }
     }
+
 
 
     private func loadKeychainKeys() {

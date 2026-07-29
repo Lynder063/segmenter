@@ -80,12 +80,18 @@ public struct VLCVideoPlayerView: NSViewRepresentable {
         private func startTimer() {
             playbackTimer?.invalidate()
             playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-                guard let self = self, let player = self.mediaPlayer, player.isPlaying, !self.isSeeking else { return }
+                guard let self = self, let player = self.mediaPlayer else { return }
+                let state = player.state
+                let active = player.isPlaying || state == .playing || state == .opening
+                guard active, !self.isSeeking else { return }
+
                 let timeMs = Int(player.time.value?.int64Value ?? 0)
                 if timeMs >= 0 {
                     DispatchQueue.main.async {
-                        self.parent.currentPositionMs = timeMs
-                        self.parent.onTimeChanged?(timeMs)
+                        if self.parent.currentPositionMs != timeMs {
+                            self.parent.currentPositionMs = timeMs
+                            self.parent.onTimeChanged?(timeMs)
+                        }
                     }
                 }
                 if let lengthMs = player.media?.length.value?.intValue, lengthMs > 0, self.parent.durationMs != lengthMs {
@@ -109,8 +115,13 @@ public struct VLCVideoPlayerView: NSViewRepresentable {
 
             let media = VLCMedia(url: url)
             mediaPlayer?.media = media
-            mediaPlayer?.play()
-            startTimer()
+
+            if parent.isPlaying {
+                mediaPlayer?.play()
+                startTimer()
+            } else {
+                mediaPlayer?.pause()
+            }
         }
 
         func update(url: URL?, isPlaying: Bool, positionMs: Int) {
@@ -120,21 +131,26 @@ public struct VLCVideoPlayerView: NSViewRepresentable {
 
             guard let player = mediaPlayer else { return }
 
-            if isPlaying && !player.isPlaying {
-                player.play()
+            if isPlaying {
+                if !player.isPlaying && player.state != .playing && player.state != .opening {
+                    player.play()
+                }
                 startTimer()
-            } else if !isPlaying && player.isPlaying {
-                player.pause()
+            } else {
+                if player.isPlaying || player.state == .playing {
+                    player.pause()
+                }
                 stopTimer()
             }
 
+
             if !isSeeking {
                 let playerMs = Int(player.time.value?.int64Value ?? 0)
-                if abs(playerMs - positionMs) > 400 && positionMs >= 0 {
+                if abs(playerMs - positionMs) > 300 && positionMs >= 0 {
                     isSeeking = true
                     let vlcTime = VLCTime(number: NSNumber(value: positionMs))
                     player.time = vlcTime
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                         self.isSeeking = false
                     }
                 }
@@ -146,8 +162,10 @@ public struct VLCVideoPlayerView: NSViewRepresentable {
             let timeMs = Int(player.time.value?.int64Value ?? 0)
             if timeMs >= 0 {
                 DispatchQueue.main.async {
-                    self.parent.currentPositionMs = timeMs
-                    self.parent.onTimeChanged?(timeMs)
+                    if self.parent.currentPositionMs != timeMs {
+                        self.parent.currentPositionMs = timeMs
+                        self.parent.onTimeChanged?(timeMs)
+                    }
                 }
             }
 
@@ -158,6 +176,7 @@ public struct VLCVideoPlayerView: NSViewRepresentable {
                 }
             }
         }
+
 
         public func mediaPlayerStateChanged(_ newState: VLCMediaPlayerState) {
             guard let player = mediaPlayer else { return }
