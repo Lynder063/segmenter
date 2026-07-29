@@ -89,7 +89,7 @@ public struct VLCVideoPlayerView: NSViewRepresentable {
 
         private func startTimer() {
             playbackTimer?.invalidate()
-            playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
+            playbackTimer = Timer.scheduledTimer(withTimeInterval: 0.005, repeats: true) { [weak self] _ in
                 guard let self = self, let player = self.mediaPlayer else { return }
                 let state = player.state
                 let active = player.isPlaying || state == .playing || state == .opening
@@ -112,6 +112,7 @@ public struct VLCVideoPlayerView: NSViewRepresentable {
                 }
             }
         }
+
 
         private func stopTimer() {
             playbackTimer?.invalidate()

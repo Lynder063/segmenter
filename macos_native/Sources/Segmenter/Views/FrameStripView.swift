@@ -125,68 +125,58 @@ public struct FrameStripView: View {
         let count = 13
         let stepMs = 250
         let half = count / 2
-        let targetTimes = (-half...half).map { max(0, min(durationMs > 0 ? durationMs : centerMs + 3000, centerMs + $0 * stepMs)) }
+        let maxLimit = durationMs > 0 ? durationMs : centerMs + 10000
 
-        // Update placeholder items immediately so labels display 01:54.500
-        let currentItems = targetTimes.map { ThumbnailItem(timeMs: $0, image: thumbnailCache[$0]) }
-        self.thumbnails = currentItems
+        let targetTimes = (-half...half).map { offset in
+            let raw = centerMs + offset * stepMs
+            return max(0, min(maxLimit, raw))
+        }
+
+        // Update placeholder items immediately so timestamps display instantly
+        self.thumbnails = targetTimes.map { ThumbnailItem(timeMs: $0, image: self.thumbnailCache[$0]) }
 
         // Filter missing times that are not in cache
         let missingTimes = targetTimes.filter { thumbnailCache[$0] == nil }
-        guard !missingTimes.isEmpty && !isGenerating else { return }
+        guard !missingTimes.isEmpty else { return }
 
         let ext = url.pathExtension.lowercased()
         let isNativeContainer = ["mp4", "mov", "m4v"].contains(ext)
 
-        isGenerating = true
         Task.detached(priority: .userInitiated) {
             let asset = AVAsset(url: url)
             let generator = isNativeContainer ? AVAssetImageGenerator(asset: asset) : nil
             if let generator {
                 generator.appliesPreferredTrackTransform = true
                 generator.maximumSize = CGSize(width: 160, height: 90)
-                generator.requestedTimeToleranceBefore = CMTime(value: 500, timescale: 1000)
-                generator.requestedTimeToleranceAfter = CMTime(value: 500, timescale: 1000)
+                generator.requestedTimeToleranceBefore = CMTime(value: 300, timescale: 1000)
+                generator.requestedTimeToleranceAfter = CMTime(value: 300, timescale: 1000)
             }
 
-            await withTaskGroup(of: (Int, Data?).self) { group in
-                for timeMs in missingTimes {
-                    group.addTask {
-                        // 1. For native containers (mp4/mov), try AVAssetImageGenerator
-                        if isNativeContainer, let gen = generator {
-                            let cmTime = CMTime(value: CMTimeValue(timeMs), timescale: 1000)
-                            if let cgImage = try? gen.copyCGImage(at: cmTime, actualTime: nil) {
-                                let rep = NSBitmapImageRep(cgImage: cgImage)
-                                let data = rep.representation(using: .jpeg, properties: [:])
-                                return (timeMs, data)
-                            }
-                        }
+            for timeMs in missingTimes {
+                var loadedData: Data? = nil
 
-                        // 2. Fast FFmpeg in-memory stdout pipe for MKV/x265/non-native files (<0.02s)
-                        if let data = await FFmpegService.shared.extractThumbnailData(url: url, timeMs: timeMs) {
-                            return (timeMs, data)
-                        }
-
-                        return (timeMs, nil)
+                // 1. For native containers (mp4/mov), try AVAssetImageGenerator
+                if isNativeContainer, let gen = generator {
+                    let cmTime = CMTime(value: CMTimeValue(timeMs), timescale: 1000)
+                    if let cgImage = try? gen.copyCGImage(at: cmTime, actualTime: nil) {
+                        let rep = NSBitmapImageRep(cgImage: cgImage)
+                        loadedData = rep.representation(using: .jpeg, properties: [:])
                     }
                 }
 
-                for await (tMs, dataOpt) in group {
-                    if let data = dataOpt, let img = NSImage(data: data) {
-                        await MainActor.run {
-                            self.thumbnailCache[tMs] = img
-                        }
+                // 2. Fast FFmpeg in-memory pipe for MKV/x265/non-native (<0.02s)
+                if loadedData == nil {
+                    loadedData = await FFmpegService.shared.extractThumbnailData(url: url, timeMs: timeMs)
+                }
+
+                if let data = loadedData, let img = NSImage(data: data) {
+                    await MainActor.run {
+                        self.thumbnailCache[timeMs] = img
+                        self.thumbnails = targetTimes.map { ThumbnailItem(timeMs: $0, image: self.thumbnailCache[$0]) }
                     }
                 }
-            }
-
-
-
-
-            await MainActor.run {
-                self.thumbnails = targetTimes.map { ThumbnailItem(timeMs: $0, image: self.thumbnailCache[$0]) }
-                self.isGenerating = false
             }
         }
     }
+
 }
