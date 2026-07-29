@@ -163,12 +163,14 @@ public struct MainWindowView: View {
                 .background(Color(red: 0.08, green: 0.08, blue: 0.09))
             }
         }
+        .frame(minWidth: 1000, maxWidth: .infinity, minHeight: 650, maxHeight: .infinity)
         .preferredColorScheme(.dark)
         .onAppear {
             loadKeychainKeys()
             setupKeyboardMonitor()
         }
     }
+
 
     private func setSegmentStart(for type: SegmentType) {
         var draft = drafts[type] ?? SegmentDraft()

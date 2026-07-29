@@ -110,11 +110,14 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--test-rcd" {
     window.title = "Segmenter (Native macOS)"
     window.titlebarAppearsTransparent = true
     window.titleVisibility = .hidden
+    window.collectionBehavior = [.fullScreenPrimary, .managed]
+    window.minSize = NSSize(width: 1000, height: 650)
     window.center()
     window.contentView = NSHostingView(rootView: MainWindowView())
     window.makeKeyAndOrderFront(nil)
 
     app.run()
+
 }
 
 
