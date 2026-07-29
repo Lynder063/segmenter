@@ -164,12 +164,16 @@ public struct MainWindowView: View {
             }
         }
         .frame(minWidth: 1000, maxWidth: .infinity, minHeight: 650, maxHeight: .infinity)
+        .onTapGesture {
+            NSApp.keyWindow?.makeFirstResponder(nil)
+        }
         .preferredColorScheme(.dark)
         .onAppear {
             loadKeychainKeys()
             setupKeyboardMonitor()
         }
     }
+
 
 
     private func setSegmentStart(for type: SegmentType) {
@@ -190,6 +194,10 @@ public struct MainWindowView: View {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if let firstResponder = NSApp.keyWindow?.firstResponder,
                firstResponder is NSTextView || firstResponder is NSTextField {
+                if event.keyCode == 53 || event.keyCode == 36 { // Escape (53) or Return (36)
+                    NSApp.keyWindow?.makeFirstResponder(nil)
+                    return nil
+                }
                 return event
             }
 
@@ -358,17 +366,166 @@ public struct MainWindowView: View {
     }
 
     private func searchTMDB() {
-        LoggerService.shared.info("[UI] Searching TMDB for: \(searchQuery)")
+        let keyToUse = tmdbKey.trimmingCharacters(in: .whitespaces)
+        guard !keyToUse.isEmpty else {
+            statusMessage = "Error: TMDB API Key is missing. Enter TMDB Key in sidebar."
+            return
+        }
+
+        let trimmedQuery = searchQuery.trimmingCharacters(in: .whitespaces)
+        let trimmedId = tmdbId.trimmingCharacters(in: .whitespaces)
+
+        // If user provided a numeric TMDB ID directly in either field
+        if let numericId = Int(trimmedId.isEmpty ? trimmedQuery : trimmedId) {
+            statusMessage = "Fetching TMDB ID \(numericId)..."
+            Task {
+                do {
+                    let result = try await TMDBClient.shared.fetchByTMDBId(tmdbId: numericId, mediaType: mediaType, apiKey: keyToUse)
+                    await MainActor.run {
+                        self.tmdbId = String(numericId)
+                        if let imdb = result.imdbId {
+                            self.imdbId = imdb
+                        }
+                        self.statusMessage = "Matched TMDB ID \(numericId): \(result.title)"
+                    }
+                } catch {
+                    await MainActor.run {
+                        self.statusMessage = "TMDB ID Error: \(error.localizedDescription)"
+                    }
+                }
+            }
+            return
+        }
+
+        guard !trimmedQuery.isEmpty else {
+            statusMessage = "Please enter title or TMDB ID to search"
+            return
+        }
+
+        statusMessage = "Searching TMDB for '\(trimmedQuery)'..."
+        Task {
+            do {
+                let results = try await TMDBClient.shared.searchByTitle(query: trimmedQuery, mediaType: mediaType, apiKey: keyToUse)
+                await MainActor.run {
+                    if let first = results.first {
+                        self.tmdbId = String(first.tmdbId)
+                        if let imdb = first.imdbId {
+                            self.imdbId = imdb
+                        }
+                        self.statusMessage = "Found '\(first.title)' (TMDB ID: \(first.tmdbId))"
+                    } else {
+                        self.statusMessage = "No TMDB results found for '\(trimmedQuery)'"
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.statusMessage = "TMDB Search Error: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
-
     private func loadSegments() {
-        LoggerService.shared.info("[UI] Loading segments...")
+        guard let tmdbInt = Int(tmdbId.trimmingCharacters(in: .whitespaces)) else {
+            statusMessage = "Error: Specify TMDB ID to load segments"
+            return
+        }
+
+        let seasonNum = Int(season.trimmingCharacters(in: .whitespaces))
+        let epNum = Int(episode.trimmingCharacters(in: .whitespaces))
+        let imdbStr = imdbId.trimmingCharacters(in: .whitespaces)
+
+        statusMessage = "Fetching segments from database..."
+        let query = MediaQuery(
+            tmdbId: tmdbInt,
+            imdbId: imdbStr.isEmpty ? nil : imdbStr,
+            season: seasonNum,
+            episode: epNum,
+            durationMs: durationMs > 0 ? durationMs : nil
+        )
+
+        let client = TheIntroDBClient()
+        let apiKey = theIntroDBKey.isEmpty ? introDBKey : theIntroDBKey
+
+        Task {
+            do {
+                let (response, _) = try await client.fetchMedia(query: query, apiKey: apiKey)
+                await MainActor.run {
+                    if let data = response["data"] as? [String: Any] {
+                        var loaded = 0
+                        if let intro = data["intro"] as? [String: Any],
+                           let start = intro["start_ms"] as? Int, let end = intro["end_ms"] as? Int {
+                            self.drafts[.intro] = SegmentDraft(startMs: start, endMs: end)
+                            loaded += 1
+                        }
+                        if let credits = data["credits"] as? [String: Any],
+                           let start = credits["start_ms"] as? Int, let end = credits["end_ms"] as? Int {
+                            self.drafts[.credits] = SegmentDraft(startMs: start, endMs: end)
+                            loaded += 1
+                        }
+                        if let recap = data["recap"] as? [String: Any],
+                           let start = recap["start_ms"] as? Int, let end = recap["end_ms"] as? Int {
+                            self.drafts[.recap] = SegmentDraft(startMs: start, endMs: end)
+                            loaded += 1
+                        }
+                        self.statusMessage = "Loaded \(loaded) segment(s) from database!"
+                    } else {
+                        self.statusMessage = "No segments found in database for TMDB \(tmdbInt)"
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.statusMessage = "Load Error: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     private func uploadAllDrafts() {
-        LoggerService.shared.info("[UI] Uploading all draft segments...")
+        let keyToUse = theIntroDBKey.trimmingCharacters(in: .whitespaces)
+        guard !keyToUse.isEmpty else {
+            statusMessage = "Error: TheIntroDB API key is missing. Set API key in sidebar."
+            return
+        }
+
+        guard let tmdbInt = Int(tmdbId.trimmingCharacters(in: .whitespaces)) else {
+            statusMessage = "Error: Valid TMDB ID is required for submission"
+            return
+        }
+
+        statusMessage = "Submitting segments to TheIntroDB..."
+        let client = TheIntroDBClient()
+
+        var payload: [String: Any] = [
+            "tmdb_id": tmdbInt,
+            "media_type": mediaType.rawValue
+        ]
+        if let s = Int(season.trimmingCharacters(in: .whitespaces)) { payload["season"] = s }
+        if let e = Int(episode.trimmingCharacters(in: .whitespaces)) { payload["episode"] = e }
+        if !imdbId.isEmpty { payload["imdb_id"] = imdbId.trimmingCharacters(in: .whitespaces) }
+
+        var segDict: [String: Any] = [:]
+        for (type, draft) in drafts {
+            if let start = draft.startMs, let end = draft.endMs, end > start {
+                segDict[type.rawValue] = ["start_ms": start, "end_ms": end]
+            }
+        }
+        payload["segments"] = segDict
+
+        Task {
+            do {
+                let (_, _) = try await client.submit(requestBody: payload, apiKey: keyToUse)
+                await MainActor.run {
+                    self.statusMessage = "Successfully submitted segments to TheIntroDB!"
+                }
+            } catch {
+                await MainActor.run {
+                    self.statusMessage = "Submission Error: \(error.localizedDescription)"
+                }
+            }
+        }
     }
+
 
     private func scanSeason() {
         let panel = NSOpenPanel()

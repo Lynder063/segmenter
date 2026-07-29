@@ -188,11 +188,103 @@ public actor IntroDBClient {
 
 // MARK: - TMDB Client
 public actor TMDBClient {
+    public static let shared = TMDBClient()
     private let baseURL: String
     private let imageBaseURL: String = "https://image.tmdb.org/t/p/"
 
     public init(baseURL: String = "https://api.themoviedb.org/3") {
         self.baseURL = baseURL
+    }
+
+    public func searchByTitle(query: String, mediaType: MediaType, apiKey: String) async throws -> [AutoLookupResult] {
+        let cleanedKey = apiKey.trimmingCharacters(in: .whitespaces)
+        guard !cleanedKey.isEmpty else {
+            throw APIClientError.requestFailed("TMDB API key is missing. Please enter your TMDB API Key in the sidebar.")
+        }
+        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return []
+        }
+
+        let endpoint = mediaType == .movie ? "search/movie" : "search/tv"
+        var components = URLComponents(string: "\(baseURL)/\(endpoint)")!
+        components.queryItems = [
+            URLQueryItem(name: "api_key", value: cleanedKey),
+            URLQueryItem(name: "query", value: query),
+            URLQueryItem(name: "include_adult", value: "false")
+        ]
+
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "GET"
+        request.addValue("Bearer \(cleanedKey)", forHTTPHeaderField: "Authorization")
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            throw APIClientError.requestFailed("TMDB HTTP \(http.statusCode)")
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let results = json["results"] as? [[String: Any]] else {
+            return []
+        }
+
+        var mapped: [AutoLookupResult] = []
+        for item in results.prefix(8) {
+            guard let tmdbId = item["id"] as? Int else { continue }
+            let title = (item["title"] as? String) ?? (item["name"] as? String) ?? "Untitled"
+            let dateStr = (item["release_date"] as? String) ?? (item["first_air_date"] as? String)
+            var year: Int? = nil
+            if let date = dateStr, date.count >= 4 {
+                year = Int(date.prefix(4))
+            }
+            let posterPath = item["poster_path"] as? String
+            let posterUrl = posterPath.map { "\(imageBaseURL)w154/\($0.hasPrefix("/") ? String($0.dropFirst()) : $0)" }
+
+            mapped.append(AutoLookupResult(
+                tmdbId: tmdbId,
+                imdbId: nil,
+                mediaType: mediaType,
+                season: nil,
+                episode: nil,
+                title: title,
+                matchedYear: year,
+                posterUrl: posterUrl
+            ))
+        }
+
+        return await enrichWithIMDbIDs(results: mapped, mediaType: mediaType, apiKey: cleanedKey)
+    }
+
+    public func fetchByTMDBId(tmdbId: Int, mediaType: MediaType, apiKey: String) async throws -> (title: String, imdbId: String?) {
+        let cleanedKey = apiKey.trimmingCharacters(in: .whitespaces)
+        guard !cleanedKey.isEmpty else {
+            throw APIClientError.requestFailed("TMDB API key is missing")
+        }
+
+        let endpoint = mediaType == .movie ? "movie/\(tmdbId)" : "tv/\(tmdbId)"
+        var components = URLComponents(string: "\(baseURL)/\(endpoint)")!
+        components.queryItems = [
+            URLQueryItem(name: "api_key", value: cleanedKey)
+        ]
+
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "GET"
+        request.addValue("Bearer \(cleanedKey)", forHTTPHeaderField: "Authorization")
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            throw APIClientError.requestFailed("TMDB HTTP \(http.statusCode)")
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw APIClientError.requestFailed("Invalid response from TMDB")
+        }
+
+        let title = (json["title"] as? String) ?? (json["name"] as? String) ?? "Unknown Media"
+        let imdbId = await fetchIMDbID(mediaType: mediaType, tmdbId: tmdbId, apiKey: cleanedKey)
+
+        return (title: title, imdbId: imdbId)
     }
 
     public func resolveHints(hint: ParsedFilenameHint, apiKey: String, limit: Int = 6) async throws -> [AutoLookupResult] {
@@ -209,6 +301,7 @@ public actor TMDBClient {
 
         var components = URLComponents(string: "\(baseURL)/\(endpoint)")!
         var queryItems = [
+            URLQueryItem(name: "api_key", value: cleanedKey),
             URLQueryItem(name: "query", value: hint.title),
             URLQueryItem(name: "include_adult", value: "false")
         ]
@@ -255,6 +348,7 @@ public actor TMDBClient {
 
         return await enrichWithIMDbIDs(results: mapped, mediaType: hint.mediaTypeHint, apiKey: cleanedKey)
     }
+
 
     private func enrichWithIMDbIDs(results: [AutoLookupResult], mediaType: MediaType, apiKey: String) async -> [AutoLookupResult] {
         await withTaskGroup(of: (Int, String?).self) { group in
