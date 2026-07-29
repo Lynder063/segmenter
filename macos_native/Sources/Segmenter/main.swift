@@ -35,8 +35,43 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--test-rcd" {
     }
     RunLoop.main.run()
 } else {
-    // Normal GUI app mode
     final class AppDelegate: NSObject, NSApplicationDelegate {
+        private func setupMainMenu() {
+            let mainMenu = NSMenu()
+
+            // App Menu
+            let appMenuItem = NSMenuItem()
+            mainMenu.addItem(appMenuItem)
+            let appMenu = NSMenu()
+            appMenuItem.submenu = appMenu
+            appMenu.addItem(withTitle: "About Segmenter", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+            appMenu.addItem(NSMenuItem.separator())
+            appMenu.addItem(withTitle: "Quit Segmenter", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+
+            // Edit Menu (Crucial for Cmd+V Paste, Cmd+C Copy, Cmd+A SelectAll in TextFields)
+            let editMenuItem = NSMenuItem()
+            mainMenu.addItem(editMenuItem)
+            let editMenu = NSMenu(title: "Edit")
+            editMenuItem.submenu = editMenu
+            editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+            editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+            editMenu.addItem(NSMenuItem.separator())
+            editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+            editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+            editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+            editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+            // Window Menu
+            let windowMenuItem = NSMenuItem()
+            mainMenu.addItem(windowMenuItem)
+            let windowMenu = NSMenu(title: "Window")
+            windowMenuItem.submenu = windowMenu
+            windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+            windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+
+            NSApp.mainMenu = mainMenu
+        }
+
         func applicationDidFinishLaunching(_ notification: Notification) {
             #if arch(arm64)
             let arch = "ARM64 (Apple Silicon)"
@@ -51,6 +86,7 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--test-rcd" {
             LoggerService.shared.info("Architecture: \(arch)")
             LoggerService.shared.info("==========================================")
 
+            setupMainMenu()
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
         }
@@ -59,6 +95,7 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--test-rcd" {
             return true
         }
     }
+
 
     let app = NSApplication.shared
     let delegate = AppDelegate()

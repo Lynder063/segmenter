@@ -102,13 +102,10 @@ public struct SidebarView: View {
 
                 // Section 2: API Keys
                 GroupBox(label: Text("API Keys").fontWeight(.bold)) {
-                    VStack(spacing: 6) {
-                        SecureField("TheIntroDB API Key", text: $theIntroDBKey)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                        SecureField("IntroDB API Key", text: $introDBKey)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                        SecureField("TMDB API Key", text: $tmdbKey)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                    VStack(spacing: 8) {
+                        APIKeyRow(placeholder: "TheIntroDB API Key", text: $theIntroDBKey)
+                        APIKeyRow(placeholder: "IntroDB API Key", text: $introDBKey)
+                        APIKeyRow(placeholder: "TMDB API Key", text: $tmdbKey)
 
                         Button(action: onSaveKeys) {
                             Text("Save Keys to Keyring")
@@ -117,6 +114,7 @@ public struct SidebarView: View {
                     }
                     .padding(6)
                 }
+
 
                 // Section 3: Media Identification
                 GroupBox(label: Text("Media Identification").fontWeight(.bold)) {
@@ -307,3 +305,45 @@ public struct SidebarView: View {
         }
     }
 }
+
+// MARK: - API Key Input Row with Show/Hide Toggle & One-Click Clipboard Paste
+struct APIKeyRow: View {
+    let placeholder: String
+    @Binding var text: String
+    @State private var isVisible: Bool = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if isVisible {
+                TextField(placeholder, text: $text)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+            } else {
+                SecureField(placeholder, text: $text)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+            }
+
+            // Show / Hide Visibility Toggle (👁️ / 🙈)
+            Button(action: { isVisible.toggle() }) {
+                Image(systemName: isVisible ? "eye.slash.fill" : "eye.fill")
+                    .foregroundColor(.secondary)
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .help(isVisible ? "Hide API Key" : "Show API Key")
+
+            // One-Click Paste from Clipboard (📋)
+            Button(action: {
+                if let pasted = NSPasteboard.general.string(forType: .string) {
+                    text = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }) {
+                Image(systemName: "doc.on.clipboard")
+                    .foregroundColor(.accentColor)
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .help("Paste API Key from Clipboard")
+        }
+    }
+}
+
