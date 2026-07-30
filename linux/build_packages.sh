@@ -6,14 +6,23 @@ echo "=== Segmenter Linux Packaging Tool ==="
 
 # Define paths
 WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD_DIR="${WORKSPACE_DIR}/linux/build"
-DIST_DIR="${WORKSPACE_DIR}/linux/dist"
-VENV_DIR="${WORKSPACE_DIR}/.venv"
+LINUX_DIR="${WORKSPACE_DIR}/linux"
+BUILD_DIR="${LINUX_DIR}/build"
+DIST_DIR="${LINUX_DIR}/dist"
 
-# Ensure virtual environment exists
+# run.sh creates its virtualenv beside itself, in linux/.venv. This looked for
+# it at the repository root, so the check below failed every time and packaging
+# never got past this point.
+VENV_DIR="${LINUX_DIR}/.venv"
+
+# Create the environment rather than refusing to work without it: a clean
+# checkout on a CI runner has never run run.sh, and asking it to would only
+# mean launching a GUI app on a headless machine.
 if [ ! -d "${VENV_DIR}" ]; then
-    echo "Virtual environment not found! Please run linux/run.sh once to set it up."
-    exit 1
+    echo "No virtualenv at ${VENV_DIR} — creating one..."
+    python3 -m venv "${VENV_DIR}"
+    "${VENV_DIR}/bin/pip" install --quiet --upgrade pip
+    "${VENV_DIR}/bin/pip" install --quiet -r "${LINUX_DIR}/requirements.txt"
 fi
 
 # Activate virtual environment
@@ -200,6 +209,62 @@ EOF
 }
 EOT
 echo "PKGBUILD created at: ${DIST_DIR}/PKGBUILD"
+
+# 4. Build AppImage (distribution-independent)
+#
+# .deb, .rpm and PKGBUILD each only serve one packaging family. An AppImage is a
+# single executable file that runs on any glibc distribution new enough for the
+# build host, which is what actually covers "every popular distro" — and it is
+# the format that makes sense to attach to a GitHub Release.
+echo "Preparing AppImage..."
+APPDIR="${BUILD_DIR}/Segmenter.AppDir"
+rm -rf "${APPDIR}"
+install -d "${APPDIR}/usr/bin" "${APPDIR}/usr/share/applications" "${APPDIR}/usr/share/icons/hicolor/256x256/apps"
+
+cp -r "${DIST_DIR}/segmenter/." "${APPDIR}/usr/bin/"
+cp "${LINUX_DIR}/app_icon.png" "${APPDIR}/usr/share/icons/hicolor/256x256/apps/segmenter.png"
+# The icon has to sit at the AppDir root as well; appimagetool looks for it
+# there rather than in the icon theme directory.
+cp "${LINUX_DIR}/app_icon.png" "${APPDIR}/segmenter.png"
+
+cat > "${APPDIR}/segmenter.desktop" <<'DESKTOP'
+[Desktop Entry]
+Name=Segmenter
+Comment=Visual timestamp annotation and automatic segment detection
+Exec=segmenter
+Icon=segmenter
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;Player;
+DESKTOP
+cp "${APPDIR}/segmenter.desktop" "${APPDIR}/usr/share/applications/segmenter.desktop"
+
+cat > "${APPDIR}/AppRun" <<'APPRUN'
+#!/bin/bash
+HERE="$(dirname "$(readlink -f "${0}")")"
+exec "${HERE}/usr/bin/segmenter" "$@"
+APPRUN
+chmod +x "${APPDIR}/AppRun"
+
+APPIMAGETOOL="$(command -v appimagetool || true)"
+if [ -z "${APPIMAGETOOL}" ]; then
+    echo "appimagetool not on PATH — downloading it..."
+    APPIMAGETOOL="${BUILD_DIR}/appimagetool"
+    curl -fsSL -o "${APPIMAGETOOL}" \
+        "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" || true
+    chmod +x "${APPIMAGETOOL}" 2>/dev/null || true
+fi
+
+if [ -x "${APPIMAGETOOL}" ]; then
+    # Containers usually lack FUSE, which appimagetool needs to mount itself;
+    # --appimage-extract-and-run sidesteps that and works everywhere.
+    ARCH=x86_64 "${APPIMAGETOOL}" --appimage-extract-and-run \
+        "${APPDIR}" "${DIST_DIR}/Segmenter-x86_64.AppImage" \
+        && echo "AppImage created at: ${DIST_DIR}/Segmenter-x86_64.AppImage" \
+        || echo "appimagetool failed — skipping AppImage."
+else
+    echo "appimagetool unavailable — skipping AppImage."
+fi
 
 echo "=== Packaging Complete ==="
 ls -l "${DIST_DIR}"

@@ -51,22 +51,39 @@ PKGBUILD
 # .NET & Windows
 [Bb]in/
 [Oo]bj/
-windows/dist/
 .dotnet/
 *.user
 *.suo
 test*.cs
 dotnet-install.ps1
 
-# Native Swift macOS
-macos_native/.build/
-macos/dist_native/
-macos/venv_mac/
+# macOS — native Swift and the PySide6 app
+mac/native/.build/
+mac/native/dist/
+mac/python/venv/
+
+# Windows — native Qt 6 / C++
+# The LibVLC SDK is ~100 MB of third-party binaries; build.ps1 documents how to
+# fetch it, so it is reproduced rather than committed.
+windows/native/third_party/
+windows/native/build/
+windows/native/dist/
+
+# Windows — .NET
+windows/dotnet/dist/
+
+# Linux — native Qt 6 / C++ (shares core/ with the Windows port)
+linux/native/build/
+linux/native/dist/
+
+# Linux — PySide6
+linux/.venv/
 
 # Temporary research documentation
 rcd_research.md
 
 # AI Agent Instructions, Configs & Prompt Metadata
+.claude/
 .gemini/
 .agents/
 AGENTS.md

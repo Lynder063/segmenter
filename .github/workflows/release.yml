@@ -1,0 +1,186 @@
+name: Release
+
+# Push a tag to cut a release:
+#   git tag v1.0.0 && git push origin v1.0.0
+#
+# Everything is built on GitHub's runners, so no Linux machine is needed to
+# produce Linux packages. Run it manually from the Actions tab first
+# (workflow_dispatch) to check the builds before attaching anything to a tag.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  QT_VERSION: 6.8.3
+  LIBVLC_VERSION: 3.0.21
+
+jobs:
+  linux:
+    name: Linux (Qt 6 / C++)
+    # Deliberately not ubuntu-latest: an AppImage runs on any glibc at least as
+    # new as the one it was built against, so building on the oldest supported
+    # runner is what makes it work on older distributions too.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ pkg-config \
+            qt6-base-dev qt6-base-dev-tools qt6-wayland \
+            libvlc-dev vlc-plugin-base \
+            libsecret-1-dev \
+            libtesseract-dev tesseract-ocr tesseract-ocr-eng \
+            dpkg-dev fakeroot desktop-file-utils \
+            libegl1 libxkbcommon-x11-0 libxcb-cursor0 libgl1 \
+            file curl ffmpeg
+
+      - name: Build
+        run: |
+          chmod +x linux/native/build.sh linux/native/package.sh
+          ./linux/native/build.sh
+
+      - name: Package (.deb + AppImage)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "${VERSION}" = "${GITHUB_REF_NAME}" ] && VERSION="1.0.0"
+          ./linux/native/package.sh --version "${VERSION}"
+
+      # A package that builds but will not start is worse than a failed build,
+      # and both failure modes here are silent — a missing platform plugin only
+      # surfaces at runtime.
+      - name: Smoke-test the packages
+        run: |
+          set -e
+          sudo apt-get install -y ./linux/native/dist/segmenter_*_amd64.deb
+          QT_QPA_PLATFORM=offscreen Segmenter --scan /nonexistent | tail -1
+
+          APPIMAGE="$(ls linux/native/dist/*.AppImage)"
+          chmod +x "${APPIMAGE}"
+          env -u QT_PLUGIN_PATH -u LD_LIBRARY_PATH QT_QPA_PLATFORM=offscreen \
+            "${APPIMAGE}" --appimage-extract-and-run --scan /nonexistent | tail -1
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p artifacts
+          cp linux/native/dist/*.deb linux/native/dist/*.AppImage artifacts/
+          # PKGBUILD is a recipe rather than a built package, but it is what an
+          # Arch user actually wants, so it ships alongside the binaries.
+          if [ -f linux/native/PKGBUILD ]; then cp linux/native/PKGBUILD artifacts/; fi
+          ls -lh artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: artifacts/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows (Qt 6 / C++)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+
+      # The LibVLC SDK is not committed to the repository. The NuGet package is
+      # a plain zip containing headers, import libraries, the DLLs and the
+      # plugin tree, which is exactly the layout CMake expects.
+      - name: Fetch LibVLC SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-WebRequest -UseBasicParsing `
+            -Uri "https://www.nuget.org/api/v2/package/VideoLAN.LibVLC.Windows/${{ env.LIBVLC_VERSION }}" `
+            -OutFile libvlc.zip
+          Expand-Archive libvlc.zip -DestinationPath libvlc_pkg -Force
+
+          $src = "libvlc_pkg/build/x64"
+          $vlc = "windows/native/third_party/vlc"
+          New-Item -ItemType Directory -Force -Path "$vlc/sdk/include","$vlc/sdk/lib" | Out-Null
+          Copy-Item "$src/include/*" "$vlc/sdk/include/" -Recurse -Force
+          Copy-Item "$src/libvlc.lib","$src/libvlccore.lib" "$vlc/sdk/lib/" -Force
+          Copy-Item "$src/libvlc.dll","$src/libvlccore.dll" "$vlc/" -Force
+          Copy-Item "$src/plugins" "$vlc/plugins" -Recurse -Force
+          foreach ($opt in 'hrtfs','lua') {
+            if (Test-Path "$src/$opt") { Copy-Item "$src/$opt" "$vlc/$opt" -Recurse -Force }
+          }
+
+      - name: Build
+        shell: pwsh
+        run: ./windows/native/build.ps1 -Configuration Release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Compress-Archive -Path windows/native/dist/* `
+            -DestinationPath artifacts/Segmenter-windows-x64.zip -Force
+          Get-ChildItem artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    # Manual runs build and upload artifacts but deliberately stop short of
+    # publishing, so the workflow can be exercised without cutting a release.
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifact directories
+        run: |
+          mkdir -p release
+          find dist -type f -exec cp {} release/ \;
+          ls -lh release
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          draft: true
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            | Platform | File |
+            |---|---|
+            | Debian / Ubuntu / Mint | `segmenter_*_amd64.deb` — `sudo apt install ./segmenter_*.deb` |
+            | Fedora, Arch, openSUSE, any other Linux | `Segmenter-*-x86_64.AppImage` — `chmod +x` and run |
+            | Windows 10/11 x64 | `Segmenter-windows-x64.zip` — unzip and run `Segmenter.exe` |
+
+            The AppImage bundles Qt and needs no installation; the `.deb` is
+            smaller because it uses the Qt and VLC your distribution already ships.
+
+            `ffmpeg` and `ffprobe` must be on `PATH` for the frame strip, the
+            waveform and RCD scanning:
+            `sudo apt install ffmpeg` / `winget install Gyan.FFmpeg`.
+
+            Optional on Linux: `libsecret-1-0` stores API keys in your keyring
+            instead of a permission-restricted file, and `tesseract-ocr-eng`
+            enables the visual pass that tells closing credits from a preview.
