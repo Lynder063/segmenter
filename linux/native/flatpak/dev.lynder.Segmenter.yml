@@ -102,6 +102,13 @@ modules:
       - --disable-lua
       - --disable-a52
       - --disable-update-check
+    # --disable-vlc drops the vlc binary itself, but its install rules still
+    # drop a desktop file/icon/appdata entry for it regardless — harmless,
+    # since nothing references them, but no reason to ship them either.
+    cleanup:
+      - /share/applications/vlc.desktop
+      - /share/metainfo/org.videolan.vlc.appdata.xml
+      - /share/icons/hicolor/*/apps/vlc.png
     sources:
       - type: archive
         url: https://download.videolan.org/videolan/vlc/3.0.23/vlc-3.0.23.tar.xz
