@@ -103,6 +103,15 @@ Supporting behaviour:
 - Full submission compatibility with **TheIntroDB v3 API** including `video_duration_ms`, `start_ms`, `end_ms`, `tmdb_id`, and `imdb_id`.
 - Support for TMDB v3 API Keys and v4 Read Access Bearer Tokens with automatic metadata resolution.
 
+### 🎮 Discord Rich Presence
+Shows what you're editing — idle, loaded, playing, paused or scanning — as
+your Discord status. Optional and off by default: copy `.env.example` to
+`.env` at the repo root and set `DISCORD_CLIENT_ID` to a Discord application
+you control (`https://discord.com/developers/applications`, with a Rich
+Presence art asset uploaded under the key `segmenter_logo`) before running
+CMake. No `.env`, no client ID compiled in, no connection attempted — nothing
+else about the app depends on it.
+
 ---
 
 ## ⌨️ Controls & Keyboard Shortcuts
@@ -183,10 +192,18 @@ installs the lot:
 ./linux/native/build.sh --run
 ```
 
-Build `.deb` and AppImage packages:
+Build `.deb`, `.rpm` and AppImage packages:
 
 ```bash
 ./linux/native/package.sh --version 1.0.0
+```
+
+Arch/AUR users build from `linux/native/PKGBUILD` directly (`makepkg -si`); it
+is not produced by `package.sh` since it is a source recipe rather than a
+built package. A sandboxed Flatpak build is also available:
+
+```bash
+./linux/native/flatpak/build.sh --version 1.0.0
 ```
 
 `libsecret` and Tesseract are optional — the build reports which it found and
