@@ -65,3 +65,14 @@ macos/venv_mac/
 
 # Temporary research documentation
 rcd_research.md
+
+# AI Agent Instructions, Configs & Prompt Metadata
+.gemini/
+.agents/
+AGENTS.md
+SKILL.md
+skills/
+commands/
+mcp-configs/
+.tempmediaStorage/
+*.ai.md
