@@ -63,7 +63,7 @@ Version: ${VERSION}
 Section: video
 Priority: optional
 Architecture: amd64
-Depends: libqt6widgets6 (>= 6.4), libqt6network6 (>= 6.4), libqt6concurrent6 (>= 6.4), libvlc5, libc6
+Depends: libqt6widgets6 (>= 6.5), libqt6network6 (>= 6.5), libqt6concurrent6 (>= 6.5), libvlc5, libc6
 Recommends: ffmpeg, libsecret-1-0, tesseract-ocr, tesseract-ocr-eng, vlc-plugin-base, qadwaitadecorations-qt6
 Maintainer: Kryštof Malinda <lynder063@users.noreply.github.com>
 Description: Visual timestamp annotation and automatic segment detection

@@ -36,21 +36,28 @@ jobs:
       - name: Write .env
         run: echo "DISCORD_CLIENT_ID=${{ secrets.DISCORD_CLIENT_ID }}" > .env
 
-      # Ubuntu 22.04's own qt6-base-dev is 6.2.4 — below the 6.5 floor
-      # core/CMakeLists.txt requires. This PPA is the standard source for a
-      # current Qt6 on 22.04 and keeps build-time and runtime Qt from the same
-      # apt/dpkg lineage, unlike installing a separate copy via aqt would
-      # (linking against a newer Qt than the .deb's own Depends: resolves to
-      # at smoke-test/install time risks an ABI mismatch at runtime).
-      - name: Add Kubuntu backports PPA (current Qt6)
-        run: sudo add-apt-repository -y ppa:kubuntu-ppa/backports
+      # Ubuntu 22.04's own qt6-base-dev is 6.2.4, below the 6.5 floor
+      # core/CMakeLists.txt requires, and (checked against a real run) the
+      # kubuntu-ppa/backports PPA does not actually carry a newer qt6-base-dev
+      # for jammy — it backports KDE Plasma/Frameworks, not raw Qt6 base, so
+      # apt silently keeps resolving to the stock 6.2.4 package even with the
+      # PPA enabled. install-qt-action sidesteps distro packaging entirely,
+      # same as the Windows job already does.
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          modules: qtwayland
+          cache: true
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build g++ pkg-config \
-            qt6-base-dev qt6-base-dev-tools qt6-wayland \
             libvlc-dev vlc-plugin-base \
             libsecret-1-dev \
             libtesseract-dev tesseract-ocr tesseract-ocr-eng \
@@ -69,14 +76,18 @@ jobs:
           [ "${VERSION}" = "${GITHUB_REF_NAME}" ] && VERSION="1.0.0"
           ./linux/native/package.sh --version "${VERSION}"
 
-      # A package that builds but will not start is worse than a failed build,
-      # and both failure modes here are silent — a missing platform plugin only
-      # surfaces at runtime.
+      # A binary that builds but will not start is worse than a failed build,
+      # and both failure modes here are silent — a missing platform plugin
+      # only surfaces at runtime. Runs the raw build output directly (against
+      # install-qt-action's Qt, still on PATH/LD_LIBRARY_PATH in this step)
+      # rather than installing the .deb: apt on this runner can only satisfy
+      # the .deb's Depends from its own 6.2.4 packages, which is a real gap
+      # for an actual end-user system too old to have caught up to 6.5 yet,
+      # not something this job can paper over.
       - name: Smoke-test the packages
         run: |
           set -e
-          sudo apt-get install -y ./linux/native/dist/segmenter_*_amd64.deb
-          QT_QPA_PLATFORM=offscreen Segmenter --scan /nonexistent | tail -1
+          QT_QPA_PLATFORM=offscreen linux/native/build/Release/bin/Segmenter --scan /nonexistent | tail -1
 
           APPIMAGE="$(ls linux/native/dist/*.AppImage)"
           chmod +x "${APPIMAGE}"
