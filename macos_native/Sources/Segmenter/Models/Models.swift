@@ -18,7 +18,7 @@ public enum MediaType: String, Codable, CaseIterable, Identifiable {
 }
 
 // MARK: - Segment Type
-public enum SegmentType: String, Codable, CaseIterable, Identifiable {
+public enum SegmentType: String, Codable, CaseIterable, Identifiable, Sendable {
     case intro = "intro"
     case recap = "recap"
     case credits = "credits"

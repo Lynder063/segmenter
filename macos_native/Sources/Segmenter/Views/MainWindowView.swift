@@ -646,19 +646,21 @@ public struct MainWindowView: View {
 
     private func loadCachedRCDSegments(for url: URL) {
         let filename = url.lastPathComponent
-        guard let matches = RCDCacheService.shared.getMatches(forFilename: filename) else { return }
+        Task {
+            guard let matches = await RCDCacheService.shared.getMatches(forFilename: filename) else { return }
 
-        var loadedCount = 0
-        for match in matches {
-            let startMs = Int(match.startSec * 1000.0)
-            let endMs = Int(match.endSec * 1000.0)
-            self.drafts[match.type] = SegmentDraft(startMs: startMs, endMs: endMs)
-            loadedCount += 1
-        }
+            var loadedCount = 0
+            for match in matches {
+                let startMs = Int(match.startSec * 1000.0)
+                let endMs = Int(match.endSec * 1000.0)
+                self.drafts[match.type] = SegmentDraft(startMs: startMs, endMs: endMs)
+                loadedCount += 1
+            }
 
-        if loadedCount > 0 {
-            self.statusMessage = "✨ Auto-loaded \(loadedCount) RCD segment(s) for episode!"
-            LoggerService.shared.info("[UI] Auto-applied \(loadedCount) RCD segments for \(filename)")
+            if loadedCount > 0 {
+                self.statusMessage = "✨ Auto-loaded \(loadedCount) RCD segment(s) for episode!"
+                LoggerService.shared.info("[UI] Auto-applied \(loadedCount) RCD segments for \(filename)")
+            }
         }
     }
 

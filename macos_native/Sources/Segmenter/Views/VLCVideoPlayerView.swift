@@ -124,16 +124,33 @@ public struct VLCVideoPlayerView: NSViewRepresentable {
             self.currentURL = url
             LoggerService.shared.info("[VLCKit] Loading video directly with LibVLC engine: \(url.lastPathComponent)")
 
-            let media = VLCMedia(url: url)
-            mediaPlayer?.media = media
+            guard let player = mediaPlayer else { return }
+
+            // Tear the previous playback down *before* swapping media. Assigning `media` to a
+            // player that is still playing leaves VLCKit's OpenGL vout thread preparing a picture
+            // for the old input while that input and its decoder are torn down underneath it,
+            // which trips an assertion inside vout_display_opengl_Prepare and aborts the whole
+            // process. Reproduced by loading one episode and then loading another.
+            stopTimer()
+            isSeeking = false
+            if player.isPlaying || player.state == .playing || player.state == .opening || player.state == .paused {
+                player.stop()
+            }
+
+            player.media = VLCMedia(url: url)
 
             if parent.isPlaying {
-                mediaPlayer?.play()
+                player.play()
                 startTimer()
             } else {
-                mediaPlayer?.play()
+                // Render a first frame, then settle back to paused. Guard on currentURL so a
+                // rapid switch to yet another episode doesn't have this fire against the new media.
+                player.play()
+                let loadedURL = url
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-                    guard let self = self, !self.parent.isPlaying else { return }
+                    guard let self = self,
+                          self.currentURL == loadedURL,
+                          !self.parent.isPlaying else { return }
                     self.mediaPlayer?.pause()
                 }
             }
@@ -158,7 +175,9 @@ public struct VLCVideoPlayerView: NSViewRepresentable {
                 stopTimer()
             }
 
-            if !isSeeking {
+            // Don't seek into media that is still opening — the demuxer and vout aren't ready,
+            // and the incoming positionMs is still the previous episode's playhead anyway.
+            if !isSeeking && player.state != .opening {
                 let playerMs = Int(player.time.value?.int64Value ?? 0)
                 if abs(playerMs - positionMs) > 150 && positionMs >= 0 {
                     isSeeking = true

@@ -1,21 +1,26 @@
 import SwiftUI
 import AppKit
 
+/// Detection methods. Every entry here must map to a genuinely distinct code path in
+/// `RCDEngineService.refineMatchesWithVisionAI` — do not add an option whose behaviour
+/// duplicates another one, and do not describe hardware or models the engine doesn't use.
 public enum RCDDetectionMethod: String, CaseIterable, Identifiable {
     case appleHWAccelerated = "Apple HW Accelerated (vDSP SIMD + Vision AI)"
-    case soundAnalysisAI = "Apple SoundAnalysis ML Classifier (Sound Events)"
-    case visionTextOCR = "Apple Vision AI OCR & Black Frame Analysis"
     case chromaprintFFT = "Chromaprint 12-Bin Pitch Chromagram (AcoustID)"
-    case multimodalFusionAI = "Multimodal AI Fusion (CLIP Vision + Audio AST)"
-    case singleEpisodeAI = "Single-Episode AI Structural Analysis"
+    case multimodalFusionAI = "Multimodal Fusion (Audio Chroma + Vision AI)"
+    case singleEpisodeAI = "Single Episode (Standalone — No Season Folder)"
 
     public var id: String { rawValue }
+
+    /// Single-episode mode analyses one file on its own; the others need sibling episodes
+    /// to cross-correlate against, so they require a season directory.
+    public var requiresSeasonFolder: Bool {
+        self != .singleEpisodeAI
+    }
 
     public var iconName: String {
         switch self {
         case .appleHWAccelerated: return "cpu.fill"
-        case .soundAnalysisAI: return "waveform.badge.plus"
-        case .visionTextOCR: return "eye.fill"
         case .chromaprintFFT: return "waveform"
         case .multimodalFusionAI: return "sparkles"
         case .singleEpisodeAI: return "play.tv.fill"
@@ -25,17 +30,13 @@ public enum RCDDetectionMethod: String, CaseIterable, Identifiable {
     public var description: String {
         switch self {
         case .appleHWAccelerated:
-            return "Accelerate SIMD 12-bin chromagram + Apple Vision AI text detection. Recommended default."
-        case .soundAnalysisAI:
-            return "Apple SoundAnalysis framework ML sound event classification for music, speech & scene transitions."
-        case .visionTextOCR:
-            return "Apple Vision AI (VNDetectTextRectanglesRequest) OCR text block detection + black frame transitions."
+            return "Accelerate vDSP 12-bin chromagram across episodes + Vision OCR text density and black-frame snapping. Recommended default."
         case .chromaprintFFT:
-            return "Pure 12-bin pitch chromagram cross-correlation (AcoustID / Chromaprint style). Ideal for music."
+            return "Pure 12-bin pitch chromagram cross-correlation (AcoustID / Chromaprint style), no visual pass. Fastest; ideal for distinct theme music."
         case .multimodalFusionAI:
-            return "Multimodal AI fusion weighting 60% 12-bin audio chromagram + 40% Vision OCR text density."
+            return "Same audio + visual signals as the default, but scored as a weighted fusion (60% chromagram + 40% Vision) instead of additive confidence boosts."
         case .singleEpisodeAI:
-            return "Standalone AI structural analysis detecting intro/outro boundaries within a single episode file."
+            return "Analyses a single video file on its own, without needing sibling episodes to compare against. Less precise — uses structural heuristics rather than cross-episode matching."
         }
     }
 }
@@ -48,8 +49,12 @@ public struct RCDScanModalView: View {
     @Binding var drafts: [SegmentType: SegmentDraft]
 
     @State private var directoryURL: URL?
+    @State private var singleFileURL: URL?
     @State private var selectedMethod: RCDDetectionMethod = .appleHWAccelerated
-    @State private var minSegmentLengthSec: Double = 45.0
+    // 15s, not 45s: plenty of shows have short segments — reality formats routinely run ~20s
+    // credits and ~30s intros — and a 45s floor silently discarded every correctly-detected
+    // segment for those, which reads as "detection is broken" rather than "threshold too high".
+    @State private var minSegmentLengthSec: Double = 15.0
     @State private var similarityThreshold: Double = 80.0
 
     @State private var isScanning: Bool = false
@@ -58,6 +63,7 @@ public struct RCDScanModalView: View {
 
     @State private var scanResults: [String: [RCDMatch]] = [:]
     @State private var debugLogs: [String] = []
+    @State private var scanTask: Task<Void, Never>?
 
 
     public init(
@@ -68,6 +74,16 @@ public struct RCDScanModalView: View {
         self._isPresented = isPresented
         self._currentVideoURL = currentVideoURL
         self._drafts = drafts
+    }
+
+    /// Cross-episode methods need sibling episodes to correlate against; single-episode
+    /// mode works on one standalone file.
+    private var needsSeasonFolder: Bool {
+        selectedMethod.requiresSeasonFolder
+    }
+
+    private var selectedSourcePath: String? {
+        needsSeasonFolder ? directoryURL?.path : singleFileURL?.path
     }
 
     public var body: some View {
@@ -85,7 +101,7 @@ public struct RCDScanModalView: View {
                         .foregroundColor(.secondary)
                 }
                 Spacer()
-                Button(action: { isPresented = false }) {
+                Button(action: { closeModal() }) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title2)
                         .foregroundColor(.secondary)
@@ -100,21 +116,26 @@ public struct RCDScanModalView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
 
-                    // 1. Directory Selection Box
+                    // 1. Source Selection Box — a season folder for cross-episode methods,
+                    // or a single file for standalone single-episode mode.
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("1. Season Directory").font(.subheadline).bold()
+                        Text(needsSeasonFolder ? "1. Season Directory" : "1. Video File").font(.subheadline).bold()
 
                         HStack {
-                            Image(systemName: "folder.fill")
+                            Image(systemName: needsSeasonFolder ? "folder.fill" : "film.fill")
                                 .foregroundColor(.accentColor)
-                            Text(directoryURL?.path ?? "No directory selected")
+                            Text(selectedSourcePath ?? (needsSeasonFolder ? "No directory selected" : "No video file selected"))
                                 .font(.system(.body, design: .monospaced))
                                 .lineLimit(1)
                                 .truncationMode(.middle)
-                                .foregroundColor(directoryURL == nil ? .secondary : .primary)
+                                .foregroundColor(selectedSourcePath == nil ? .secondary : .primary)
                             Spacer()
-                            Button("Browse Folder...") {
-                                selectDirectory()
+                            Button(needsSeasonFolder ? "Browse Folder..." : "Browse File...") {
+                                if needsSeasonFolder {
+                                    selectDirectory()
+                                } else {
+                                    selectSingleFile()
+                                }
                             }
                             .buttonStyle(.borderedProminent)
                             .disabled(isScanning)
@@ -126,11 +147,11 @@ public struct RCDScanModalView: View {
                     // 2. Detection Method Selector
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Text("2. Detection Method & HW Acceleration").font(.subheadline).bold()
+                            Text("2. Detection Method").font(.subheadline).bold()
                             Spacer()
                             HStack(spacing: 4) {
                                 Image(systemName: "cpu")
-                                Text("Apple Silicon Metal Active")
+                                Text("Accelerate vDSP SIMD")
                             }
                             .font(.caption2)
                             .padding(.horizontal, 6)
@@ -191,7 +212,7 @@ public struct RCDScanModalView: View {
                             VStack(alignment: .leading) {
                                 Text("Min Segment Length: \(Int(minSegmentLengthSec))s")
                                     .font(.caption)
-                                Slider(value: $minSegmentLengthSec, in: 15...120, step: 5)
+                                Slider(value: $minSegmentLengthSec, in: 5...120, step: 5)
                                     .disabled(isScanning)
                             }
 
@@ -322,8 +343,8 @@ public struct RCDScanModalView: View {
 
             // Footer Buttons
             HStack {
-                Button("Cancel") {
-                    isPresented = false
+                Button(isScanning ? "Cancel Scan" : "Cancel") {
+                    closeModal()
                 }
 
                 Spacer()
@@ -335,7 +356,7 @@ public struct RCDScanModalView: View {
                     }
                     .buttonStyle(.borderedProminent)
                 } else {
-                    Button("Start Season Scan") {
+                    Button(needsSeasonFolder ? "Start Season Scan" : "Scan This Episode") {
                         startScan()
                     }
                     .buttonStyle(.borderedProminent)
@@ -351,6 +372,7 @@ public struct RCDScanModalView: View {
             print("🔴 [GUI TERMINAL LOG] RCDScanModalView appeared! currentVideoURL: \(currentVideoURL?.path ?? "NIL")")
             if let currentURL = currentVideoURL {
                 directoryURL = currentURL.deletingLastPathComponent()
+                singleFileURL = currentURL
                 print("🔴 [GUI TERMINAL LOG] Pre-filled directoryURL: \(directoryURL?.path ?? "NIL")")
             } else {
                 print("🔴 [GUI TERMINAL LOG] directoryURL is initially NIL!")
@@ -374,63 +396,109 @@ public struct RCDScanModalView: View {
         }
     }
 
-    private func startScan() {
-        print("🔴 [GUI TERMINAL LOG] Start Season Scan button pressed!")
-        if directoryURL == nil {
-            print("🔴 [GUI TERMINAL LOG] directoryURL is NIL, calling selectDirectory()...")
-            selectDirectory()
+    private func selectSingleFile() {
+        print("🔴 [GUI TERMINAL LOG] Triggering NSOpenPanel for single video file selection...")
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowsOtherFileTypes = true
+        panel.message = "Select Video File for Standalone RCD Scan"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            print("🔴 [GUI TERMINAL LOG] NSOpenPanel OK! Selected file: \(url.path)")
+            self.singleFileURL = url
+        } else {
+            print("🔴 [GUI TERMINAL LOG] NSOpenPanel Cancelled or Failed!")
         }
-        guard let dirURL = directoryURL else {
-            print("🔴 [GUI TERMINAL LOG] ERROR: directoryURL is still NIL after selectDirectory()!")
-            statusText = "Error: No season directory selected"
-            debugLogs.append("[RCD Modal] Error: No season directory selected. Please click 'Browse Folder...'.")
+    }
+
+    private func startScan() {
+        print("🔴 [GUI TERMINAL LOG] Start Scan button pressed! (season folder mode: \(needsSeasonFolder))")
+
+        // Prompt for whichever source the selected method actually needs.
+        if selectedSourcePath == nil {
+            if needsSeasonFolder {
+                selectDirectory()
+            } else {
+                selectSingleFile()
+            }
+        }
+
+        let scanSource: URL?
+        if needsSeasonFolder {
+            scanSource = directoryURL
+        } else {
+            scanSource = singleFileURL
+        }
+
+        guard let sourceURL = scanSource else {
+            let what = needsSeasonFolder ? "season directory" : "video file"
+            print("🔴 [GUI TERMINAL LOG] ERROR: no \(what) selected!")
+            statusText = "Error: No \(what) selected"
+            debugLogs.append("[RCD Modal] Error: No \(what) selected. Please use the Browse button.")
             return
         }
 
-        print("🔴 [GUI TERMINAL LOG] Starting RCD scan on dirURL: \(dirURL.path) using method '\(selectedMethod.rawValue)'")
+        print("🔴 [GUI TERMINAL LOG] Starting RCD scan on \(sourceURL.path) using method '\(selectedMethod.rawValue)'")
         isScanning = true
         progressPct = 0
         statusText = "Initializing \(selectedMethod.rawValue)..."
         debugLogs.removeAll()
 
         let timeStr = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        debugLogs.append("[\(timeStr)] [RCD Modal] Starting scan on directory: \(dirURL.path)")
+        debugLogs.append("[\(timeStr)] [RCD Modal] Starting scan on: \(sourceURL.path)")
         debugLogs.append("[\(timeStr)] [RCD Modal] Selected Method: \(selectedMethod.rawValue)")
         debugLogs.append("[\(timeStr)] [RCD Modal] Min Segment Length: \(Int(minSegmentLengthSec))s, Threshold: \(Int(similarityThreshold))%")
 
-        Task.detached(priority: .userInitiated) {
-            print("🔴 [GUI TERMINAL LOG] Task.detached background worker started for RCDEngineService.scanSeason...")
+        let useSeasonFolder = needsSeasonFolder
+
+        scanTask = Task.detached(priority: .userInitiated) {
+            print("🔴 [GUI TERMINAL LOG] Task.detached background worker started for RCD scan...")
             do {
-                let results = try await RCDEngineService.shared.scanSeason(
-                    directoryURL: dirURL,
-                    method: selectedMethod,
-                    minSegmentLengthSec: minSegmentLengthSec,
-                    similarityThreshold: similarityThreshold / 100.0,
-                    debugLogger: { line in
-                        print("🔴 [GUI TERMINAL LOG] [ENGINE LOG]: \(line)")
-                        DispatchQueue.main.async {
-                            self.debugLogs.append(line)
-                        }
-                    },
-                    progressHandler: { text, pct in
-                        print("🔴 [GUI TERMINAL LOG] [PROGRESS]: \(pct)% - \(text)")
-                        DispatchQueue.main.async {
-                            self.statusText = text
-                            self.progressPct = pct
-                        }
+                let engine = RCDEngineService.shared
+                let debugLogger: (String) -> Void = { line in
+                    print("🔴 [GUI TERMINAL LOG] [ENGINE LOG]: \(line)")
+                    DispatchQueue.main.async {
+                        self.debugLogs.append(line)
                     }
-                )
-
-                print("🔴 [GUI TERMINAL LOG] RCDEngineService completed with \(results.count) results!")
-                RCDCacheService.shared.saveResults(results)
-
-                await MainActor.run {
-                    self.scanResults = results
-                    self.isScanning = false
-                    self.statusText = "Scan Complete! Auto-saved detected segments for \(results.count) episodes"
-                    applyResultsToCurrentVideo()
+                }
+                let progress: (String, Int) -> Void = { text, pct in
+                    print("🔴 [GUI TERMINAL LOG] [PROGRESS]: \(pct)% - \(text)")
+                    DispatchQueue.main.async {
+                        self.statusText = text
+                        self.progressPct = pct
+                    }
                 }
 
+                let results: [String: [RCDMatch]]
+                if useSeasonFolder {
+                    results = try await engine.scanSeason(
+                        directoryURL: sourceURL,
+                        method: selectedMethod,
+                        minSegmentLengthSec: minSegmentLengthSec,
+                        similarityThreshold: similarityThreshold / 100.0,
+                        debugLogger: debugLogger,
+                        progressHandler: progress
+                    )
+                } else {
+                    results = try await engine.scanSingleEpisode(
+                        videoURL: sourceURL,
+                        method: selectedMethod,
+                        minSegmentLengthSec: minSegmentLengthSec,
+                        similarityThreshold: similarityThreshold / 100.0,
+                        debugLogger: debugLogger,
+                        progressHandler: progress
+                    )
+                }
+                try await self.finishScan(results: results)
+            } catch is CancellationError {
+                print("🔴 [GUI TERMINAL LOG] Scan cancelled by user")
+                await MainActor.run {
+                    self.isScanning = false
+                    self.statusText = "Scan cancelled"
+                    self.debugLogs.append("[RCD Modal] Scan cancelled by user.")
+                }
             } catch {
                 let errStr = error.localizedDescription
                 print("🔴 [GUI TERMINAL LOG] EXCEPTION THROWN: \(errStr)")
@@ -441,6 +509,28 @@ public struct RCDScanModalView: View {
                 }
             }
         }
+    }
+
+    private func finishScan(results: [String: [RCDMatch]]) async throws {
+        print("🔴 [GUI TERMINAL LOG] RCD scan completed with \(results.count) results!")
+        await RCDCacheService.shared.saveResults(results)
+
+        await MainActor.run {
+            self.scanResults = results
+            self.isScanning = false
+            let totalSegments = results.values.reduce(0) { $0 + $1.count }
+            self.statusText = "Scan Complete! Found \(totalSegments) segment(s) across \(results.count) file(s)"
+            applyResultsToCurrentVideo()
+        }
+    }
+
+    /// Cancels any in-flight scan (so closing the modal doesn't leave orphaned background
+    /// work running) and dismisses the modal.
+    private func closeModal() {
+        if isScanning {
+            scanTask?.cancel()
+        }
+        isPresented = false
     }
 
 

@@ -12,7 +12,7 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--test-rcd" {
             let results = try await RCDEngineService.shared.scanSeason(
                 directoryURL: dirURL,
                 method: .appleHWAccelerated,
-                minSegmentLengthSec: 45.0,
+                minSegmentLengthSec: 15.0,
                 similarityThreshold: 80.0 / 100.0,
                 debugLogger: { line in print("[DEBUG] \(line)") },
                 progressHandler: { text, pct in print("[PROGRESS \(pct)%] \(text)") }

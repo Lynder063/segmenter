@@ -1,11 +1,16 @@
 import Foundation
 import os
 
-public final class LoggerService {
+public final class LoggerService: @unchecked Sendable {
     public static let shared = LoggerService()
 
     private let osLogger = Logger(subsystem: "org.theintrodb.segmenter", category: "App")
     private let dateFormatter: DateFormatter
+
+    /// DateFormatter is not thread-safe and `print` is not atomic across threads. The RCD engine
+    /// logs from many concurrent tasks (parallel audio extraction, template search and per-episode
+    /// localization), which without this lock corrupted and silently dropped whole log lines.
+    private let lock = NSLock()
 
     private init() {
         dateFormatter = DateFormatter()
@@ -31,8 +36,10 @@ public final class LoggerService {
     }
 
     public func log(_ message: String, level: Level = .info, file: String = #file, line: Int = #line) {
-        let timestamp = dateFormatter.string(from: Date())
         let filename = (file as NSString).lastPathComponent
+
+        lock.lock()
+        let timestamp = dateFormatter.string(from: Date())
         let formattedConsoleMsg = "\(timestamp) [\(level.colorCode)\(level.rawValue)\(level.resetCode)] [\(filename):\(line)] \(message)"
 
         // Print to Terminal stdout/stderr
@@ -41,6 +48,7 @@ public final class LoggerService {
         } else {
             print(formattedConsoleMsg)
         }
+        lock.unlock()
 
         // Send to Apple Unified OSLog system
         switch level {

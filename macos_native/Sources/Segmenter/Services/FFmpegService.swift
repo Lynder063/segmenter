@@ -235,8 +235,12 @@ public final class FFmpegService {
     }
 
 
-    // Extract fast 160x90 JPEG thumbnail Data at timeMs via ffmpeg stdout pipe (in-memory <0.02s)
-    public func extractThumbnailData(url: URL, timeMs: Int) async -> Data? {
+    /// Extract a JPEG frame at `timeMs` via an ffmpeg stdout pipe (in-memory, <0.02s at thumbnail size).
+    ///
+    /// `size` defaults to the filmstrip's 160x90. Anything doing image *analysis* rather than
+    /// display must ask for a larger frame: Vision's text detection needs glyphs several pixels
+    /// tall, and at 160x90 a credit crawl is unresolvable, so OCR silently finds nothing.
+    public func extractThumbnailData(url: URL, timeMs: Int, size: String = "160x90") async -> Data? {
         guard let ffmpeg = ffmpegPath else { return nil }
 
         return await Task.detached(priority: .userInitiated) {
@@ -248,7 +252,7 @@ public final class FFmpegService {
                 "-ss", String(format: "%.3f", sec),
                 "-i", url.path,
                 "-vframes", "1",
-                "-s", "160x90",
+                "-s", size,
                 "-f", "image2pipe",
                 "-c:v", "mjpeg",
                 "pipe:1"
