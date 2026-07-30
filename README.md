@@ -1,210 +1,80 @@
 # 🎬 Segmenter
 
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS-blue.svg)]()
-[![macOS](https://img.shields.io/badge/macOS_Arch-arm64%20%7C%20x86__64-silver.svg)]()
-[![Python](https://img.shields.io/badge/Linux%2FmacOS_Stack-Python_3.10+-yellow.svg)]()
-[![Qt](https://img.shields.io/badge/UI-PySide6%20(Qt6)-41cd52.svg)]()
-[![Dotnet](https://img.shields.io/badge/Windows_Stack-.NET_8.0-purple.svg)]()
-[![WPF](https://img.shields.io/badge/Windows_UI-WPF-blue.svg)]()
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-blue.svg)]()
+[![macOS Native](https://img.shields.io/badge/macOS_Native-SwiftUI%20%7C%20LibVLC%20%7C%20Accelerate-silver.svg)]()
+[![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-Universal_arm64%2Bx86__64-orange.svg)]()
+[![TheIntroDB v3](https://img.shields.io/badge/API-TheIntroDB_v3-purple.svg)]()
 
-**Segmenter** is a high-performance visual timestamp annotation tool for Linux, Windows, and macOS (supporting Apple Silicon `arm64` and Intel `x86_64`). It lets you create, edit, and upload media segment markers — **Intro**, **Recap**, **Credits**, and **Preview** — to [TheIntroDB](https://theintrodb.org) and [IntroDB](https://introdb.app).
-
-![Segmenter App Layout](docs/screenshot.png)
+**Segmenter** is a high-performance visual timestamp annotation and automatic AI segment detection application for macOS (Universal Binary `arm64` + `x86_64`), Linux, and Windows. It enables users to detect, create, edit, and submit video segment markers — **Intro**, **Recap**, **Credits**, and **Preview** — to [TheIntroDB](https://theintrodb.org) (v3 API) and [IntroDB](https://introdb.app).
 
 ---
 
-## ✨ Features
+## ✨ Key Native Features (macOS Native App)
 
-### 🎧 Audio Waveform Analysis
-Automatically extracts audio and displays a density waveform on the timeline. Uses FFT-based spectral flatness to color-code passages — **mint** for dialogue, **orange** for music-heavy themes like intros and outros.
+### 🎬 High-Performance Video Engine (LibVLC + VideoToolbox)
+- **100% Codec & Container Support**: Native playback for MKV, MP4, AVI, MOV, HEVC (x265), H.264, AC3, DTS, and 10-bit HDR streams.
+- **Apple VideoToolbox HW Decoding**: Low-power, hardware-accelerated video decoding on Apple Silicon M-Series and Intel GPUs.
+- **Sub-Millisecond Real-Time Playback**: 200 FPS high-precision timecode clock rendering millisecond-accurate timestamps (`02:15.842`).
+- **Instant Paused Seeking**: Frame-accurate seeking via `gotoNextFrame()` rendering instant video keyframes when paused.
 
-### 🖼️ Frame Strip Preview
-Real-time MJPEG-based frame strip centered on the playhead for frame-accurate seeking and positioning.
+### 🔍 Interactive Zoomable Multi-Track Timeline ($1.0\times - 50.0\times$)
+- **Pinch-to-Zoom & Trackpad Gestures**: Smooth trackpad magnify and scroll wheel panning across the multi-track timeline.
+- **Dynamic Time Ruler Ticks**: Automatically adjusts timecode grid ticks from 5-minute intervals down to 1-second and 250ms sub-frame intervals.
+- **Zoom Controls Toolbar**: Includes quick zoom sliders, `+`/`-` buttons, `1x` reset, and `🎯 Scope` center-on-playhead action.
 
-### 🤖 GPU-Accelerated Season Fingerprinting
-Integrated **Recurring Content Detector (RCD)** scans an entire season directory and automatically finds duplicate segments across episodes using:
-- **FAISS-GPU** nearest-neighbor search (NVIDIA) or FAISS-CPU (AMD / Apple / CPU)
-- **CNN feature extraction** (MobileNetV3 or SimpleCNN fallback via PyTorch)
-- **Apple Silicon MPS** (Metal Performance Shaders) GPU acceleration on M1/M2/M3/M4 Macs
-- **Color Histogram** and **Color Texture Moment** modes for CPU-only setups
-- **AMD ROCm** support — PyTorch ROCm builds accelerate CNN feature extraction on AMD GPUs
-- **NVIDIA CUDA** support — full GPU acceleration including FAISS-GPU
+### 🤖 Apple Native AI & RCD Season Fingerprinting
+Scan entire season folders or standalone episodes with **6 specialized detection methods**:
+1. **`Apple HW Accelerated (vDSP SIMD + Vision AI)`**: Chromaprint 12-bin pitch chromagram cross-correlation + Apple Vision OCR text rectangle density and black-frame visual snapping.
+2. **`Apple SoundAnalysis ML Classifier`**: Neural classification of speech-to-music acoustic event transitions running on the Apple Neural Engine (ANE).
+3. **`Apple Vision AI OCR`**: Optical Character Recognition (`VNDetectTextRectanglesRequest`) and luminance frame inspection ($\bar{L} < 30 / 255$).
+4. **`Chromaprint 12-Bin Pitch Chromagram`**: Pure acoustical pitch class profile cross-correlation.
+5. **`Multimodal AI Fusion`**: Dual score fusion ($60\% \text{ Audio Chroma} + 40\% \text{ Vision AI}$).
+6. **`Single-Episode AI Structural Analysis`**: Standalone AI structural scan for individual files without requiring full season directories.
 
-Results are cached in `/tmp` and reused automatically on subsequent loads.
+### 🖼️ Real-Time Dynamic Frame Strip
+- In-memory stdout frame extraction pipe for non-native MKV/x265 files ($<0.02\text{s}$ per frame).
+- 13-frame preview strip centered around the playhead for frame-accurate boundary placement.
 
-### 🌐 Remote Network Shares
-Stream and analyze files directly from Samba/SMB, SFTP, NFS, WebDAV, or HTTP mounts via native file dialogs.
-
-### 🔑 Local Configuration
-API keys are stored in `~/.config/Segmenter/keys.json` — no keyring daemon required.
+### 🔑 Secure macOS Keychain Storage & TheIntroDB v3 API
+- API keys stored securely in the native macOS Keychain.
+- Full submission compatibility with **TheIntroDB v3 API** including `video_duration_ms`, `start_ms`, `end_ms`, `tmdb_id`, and `imdb_id`.
+- Support for TMDB v3 API Keys and v4 Read Access Bearer Tokens with automatic metadata resolution.
 
 ---
 
-## ⌨️ Controls & Shortcuts
+## ⌨️ Controls & Keyboard Shortcuts
 
-### Timeline Mouse Actions
-
-| Action | Description |
-|---|---|
-| **Click** | Seek to position |
-| **Alt + Drag** | Create a new segment |
-| **Shift + Drag** | Move a segment between rows |
-| **Drag Edges** | Resize segment boundaries |
-| **Scroll Wheel** | Zoom in/out around playhead |
-
-### Keyboard Shortcuts
-
-| Shortcut | Description |
+| Shortcut | Action |
 |---|---|
 | <kbd>Space</kbd> | Toggle play / pause |
-| <kbd>←</kbd> / <kbd>→</kbd> | Step one frame backward / forward |
+| <kbd>←</kbd> / <kbd>→</kbd> or <kbd>,</kbd> / <kbd>.</kbd> | Step one frame backward / forward |
 | <kbd>I</kbd> / <kbd>Shift+I</kbd> | Set Intro start / end |
 | <kbd>R</kbd> / <kbd>Shift+R</kbd> | Set Recap start / end |
 | <kbd>C</kbd> / <kbd>Shift+C</kbd> | Set Credits start / end |
 | <kbd>P</kbd> / <kbd>Shift+P</kbd> | Set Preview start / end |
-| <kbd>,</kbd> | Snap nearest segment edge to playhead |
+| <kbd>Escape</kbd> / <kbd>Return</kbd> | Clear text input focus & return keyboard controls to player |
+| **Pinch Gesture** | Zoom timeline in / out ($1.0\times - 50.0\times$) |
+| **Trackpad Pan** | Scroll timeline horizontally |
 
 ---
 
-## 🚀 Quick Start (macOS — arm64 & x86_64)
+## 🚀 Native Build & Launch (macOS)
 
-### Prerequisites
-
-| Dependency | Purpose |
-|---|---|
-| `python3` (≥ 3.10) | Runtime (`brew install python@3.11`) |
-| `ffmpeg` | Audio extraction and frame strip thumbnails (`brew install ffmpeg`) |
-
-### Run
+### 1. Build Universal Binary App (`arm64` + `x86_64`)
 
 ```bash
-./macos/run.sh
+./macos/build_native.sh
 ```
 
-### Build Standalone App (.app / .dmg)
+### 2. Run Application Directly
 
 ```bash
-./macos/build_app.sh
+./macos/dist_native/Segmenter.app/Contents/MacOS/Segmenter
 ```
-
----
-
-## 🚀 Quick Start (Linux)
-
-### Prerequisites
-
-| Dependency | Purpose |
-|---|---|
-| `python3` (≥ 3.10) | Runtime |
-| `pip` | Package manager |
-| `ffmpeg` | Audio/video processing |
-| NVIDIA CUDA drivers | *Optional* — full GPU acceleration (CNN + FAISS) |
-| AMD ROCm + PyTorch-ROCm | *Optional* — GPU acceleration for CNN feature extraction |
-
-### Run
-
-```bash
-./linux/run.sh
-```
-
-This script automatically creates a virtual environment, installs all Python dependencies, and launches the app.
-
----
-
-## 🚀 Quick Start (Windows)
-
-### Prerequisites
-
-| Dependency | Purpose |
-|---|---|
-| `.NET 8.0 SDK` | Compilation and runtime |
-| `ffmpeg` | Audio extraction and thumbnail generation (must be in system PATH) |
-
-### Build & Run
-
-Run the PowerShell build script:
-
-```powershell
-.\windows\build.ps1
-```
-
-This will restore dependencies, compile the project, and generate a standalone executable at `windows\dist\Segmenter.exe`.
-
----
-
-## 📦 Packaging
-
-Build standalone `.deb`, `.rpm`, and Arch Linux packages:
-
-```bash
-./linux/build_packages.sh
-```
-
-Build standalone macOS `.app` and `.dmg`:
-
-```bash
-./macos/build_app.sh
-```
-
----
-
-## 🏗️ Project Structure
-
-```
-.
-├── macos/                  # macOS Port (arm64 & x86_64)
-│   ├── app.py              # macOS Entry point & Native Menu Bar
-│   ├── run.sh              # macOS Quick Start launcher
-│   ├── build_app.sh        # PyInstaller bundle & DMG builder
-│   ├── Info.plist          # Apple Bundle Metadata (Retina, File associations)
-│   ├── requirements.txt    # macOS dependencies
-│   └── README.md           # macOS documentation
-├── windows/
-│   ├── build.ps1           # Windows Build Script
-│   ├── Segmenter/          # WPF C# Application
-│   │   ├── MainWindow.xaml # Main UI
-│   │   └── ...
-│   └── dist/               # Compiled Segmenter.exe
-├── linux/
-│   ├── app.py              # Entry point
-│   ├── ui.py               # Main window & all UI logic
-│   ├── timeline.py         # Interactive timeline widget
-│   ├── framestrip.py       # MJPEG frame strip
-│   ├── player.py           # Video player (mpv backend)
-│   ├── audio.py            # Audio waveform extraction
-│   ├── models.py           # Data models (SegmentType, SegmentDraft, etc.)
-│   ├── clients.py          # TheIntroDB & IntroDB API clients
-│   ├── parser.py           # Filename → TMDB metadata parser
-│   ├── validator.py        # Segment validation rules
-│   ├── rcd_integration.py  # RCD scan dialog & worker
-│   ├── gpu.py              # Unified GPU detection (CUDA / ROCm / MPS / CPU)
-│   ├── rcd/                # Recurring Content Detector engine
-│   │   ├── detector.py     # Main detection pipeline
-│   │   ├── featurevectors.py # Feature vector extraction (CH, CTM, CNN)
-│   │   ├── video_functions.py # Video resize & framerate utils
-│   │   └── evaluation.py   # Detection evaluation metrics
-│   ├── run.sh              # Launcher script
-│   ├── build_packages.sh   # Packaging script
-│   └── requirements.txt    # Python dependencies
-├── docs/
-│   └── screenshot.png
-├── LICENSE
-└── README.md
-```
-
-
----
-
-## 🙏 Acknowledgements
-
-- **[recurring-content-detector](https://github.com/haser/recurring-content-detector)** — Core fingerprinting, FAISS search, and CNN algorithms used for automated recurring segment detection.
-- **[IntroStamp](https://github.com/fetchbot/introstamp)** — The original macOS segment editor that served as UX model and design inspiration.
-- **[TheIntroDB](https://theintrodb.org)** & **[IntroDB](https://introdb.app)** — Public segment marker databases and APIs.
-- **[TMDB](https://www.themoviedb.org)** — Movie and TV metadata.
 
 ---
 
 ## 📄 License
 
-MIT License — see [LICENSE](LICENSE).
+Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.

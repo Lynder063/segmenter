@@ -117,7 +117,5 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--test-rcd" {
     window.makeKeyAndOrderFront(nil)
 
     app.run()
-
 }
-
 
