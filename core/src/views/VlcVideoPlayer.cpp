@@ -2,10 +2,15 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QMutexLocker>
+#include <QPainter>
 #include <QPalette>
 #include <QTimer>
 
 #include <vlc/vlc.h>
+
+#include <cstring>
+#include <utility>
 
 #include "services/LoggerService.h"
 
@@ -22,9 +27,13 @@ VlcVideoPlayer::VlcVideoPlayer(QWidget *parent)
     : QWidget(parent)
 {
     setObjectName(QStringLiteral("videoStage"));
+#ifdef Q_OS_WIN
+    // VLC embeds into this widget's native HWND, so it needs one of its own
+    // rather than sharing an ancestor's, and Qt must not paint over it.
     setAttribute(Qt::WA_NativeWindow);
     setAttribute(Qt::WA_DontCreateNativeAncestors);
     setAttribute(Qt::WA_OpaquePaintEvent);
+#endif
     setAutoFillBackground(true);
 
     QPalette blackPalette = palette();
@@ -73,7 +82,18 @@ void VlcVideoPlayer::ensureEngine()
         return;
     }
 
+#ifdef Q_OS_WIN
     libvlc_media_player_set_hwnd(m_player, reinterpret_cast<void *>(winId()));
+#else
+    // No libvlc_media_player_set_xwindow() here on purpose — that call only
+    // works given a real X11 window, which native Wayland does not hand out.
+    // Raw callbacks sidestep the question entirely by never asking LibVLC to
+    // own a window; see the class comment in the header.
+    libvlc_video_set_callbacks(m_player, &VlcVideoPlayer::lockCallback,
+                                &VlcVideoPlayer::unlockCallback,
+                                &VlcVideoPlayer::displayCallback, this);
+    libvlc_video_set_format_callbacks(m_player, &VlcVideoPlayer::formatCallback, nullptr);
+#endif
 
     m_pollTimer->start();
 
@@ -280,5 +300,72 @@ void VlcVideoPlayer::pollState()
         emit playingStateChanged(playing);
     }
 }
+
+#ifndef Q_OS_WIN
+
+unsigned VlcVideoPlayer::formatCallback(void **opaque, char *chroma, unsigned *width,
+                                         unsigned *height, unsigned *pitches, unsigned *lines)
+{
+    // RV32 is packed 32-bit BGRx in memory on little-endian, the same layout
+    // as QImage::Format_RGB32 — so lockCallback can hand LibVLC a QImage's own
+    // buffer directly with no conversion pass.
+    memcpy(chroma, "RV32", 4);
+
+    auto *player = static_cast<VlcVideoPlayer *>(*opaque);
+    QMutexLocker locker(&player->m_frameMutex);
+    player->m_backBuffer = QImage(*width, *height, QImage::Format_RGB32);
+    player->m_frontBuffer = QImage(*width, *height, QImage::Format_RGB32);
+    player->m_backBuffer.fill(Qt::black);
+    player->m_frontBuffer.fill(Qt::black);
+
+    pitches[0] = static_cast<unsigned>(player->m_backBuffer.bytesPerLine());
+    lines[0] = *height;
+    return 1;
+}
+
+void *VlcVideoPlayer::lockCallback(void *opaque, void **planes)
+{
+    auto *player = static_cast<VlcVideoPlayer *>(opaque);
+    player->m_frameMutex.lock();
+    planes[0] = player->m_backBuffer.bits();
+    return nullptr;
+}
+
+void VlcVideoPlayer::unlockCallback(void *opaque, void * /*picture*/, void *const * /*planes*/)
+{
+    static_cast<VlcVideoPlayer *>(opaque)->m_frameMutex.unlock();
+}
+
+void VlcVideoPlayer::displayCallback(void *opaque, void * /*picture*/)
+{
+    auto *player = static_cast<VlcVideoPlayer *>(opaque);
+    {
+        QMutexLocker locker(&player->m_frameMutex);
+        std::swap(player->m_backBuffer, player->m_frontBuffer);
+    }
+    // display() runs on LibVLC's decode thread; update() must not.
+    QMetaObject::invokeMethod(player, "update", Qt::QueuedConnection);
+}
+
+void VlcVideoPlayer::paintEvent(QPaintEvent * /*event*/)
+{
+    QPainter painter(this);
+    painter.fillRect(rect(), Qt::black);
+
+    QMutexLocker locker(&m_frameMutex);
+    if (m_frontBuffer.isNull()) {
+        return;
+    }
+
+    // Letterbox rather than stretch, the same aspect handling VLC's own
+    // window-embedded output does.
+    const QSize target = m_frontBuffer.size().scaled(size(), Qt::KeepAspectRatio);
+    const QRect destination(QPoint((width() - target.width()) / 2,
+                                    (height() - target.height()) / 2),
+                             target);
+    painter.drawImage(destination, m_frontBuffer);
+}
+
+#endif // !Q_OS_WIN
 
 } // namespace segmenter

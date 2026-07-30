@@ -38,6 +38,8 @@ qt_add_library(segmenter_core STATIC
     src/services/RcdFeatureCache.h
     src/services/SegmentValidator.cpp
     src/services/SegmentValidator.h
+    src/services/DiscordRpcService.cpp
+    src/services/DiscordRpcService.h
 
     src/views/FrameStripWidget.cpp
     src/views/FrameStripWidget.h
@@ -82,6 +84,29 @@ endif()
 target_compile_definitions(segmenter_core PUBLIC
     SEGMENTER_VERSION="${PROJECT_VERSION}"
 )
+
+# --- Discord Rich Presence client ID ----------------------------------------
+# Read from a git-ignored .env at the repo root, so a real Discord application
+# ID never has to be committed — see .env.example. Every checkout but the
+# maintainer's own has no .env, and DiscordRpcService just stays disabled.
+set(SEGMENTER_ENV_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../.env")
+if(EXISTS "${SEGMENTER_ENV_FILE}")
+    file(STRINGS "${SEGMENTER_ENV_FILE}" SEGMENTER_ENV_LINES)
+    foreach(SEGMENTER_ENV_LINE IN LISTS SEGMENTER_ENV_LINES)
+        if(SEGMENTER_ENV_LINE MATCHES "^DISCORD_CLIENT_ID=(.+)$")
+            set(SEGMENTER_DISCORD_CLIENT_ID "${CMAKE_MATCH_1}")
+        endif()
+    endforeach()
+endif()
+
+if(SEGMENTER_DISCORD_CLIENT_ID)
+    target_compile_definitions(segmenter_core PUBLIC
+        SEGMENTER_DISCORD_CLIENT_ID="${SEGMENTER_DISCORD_CLIENT_ID}"
+    )
+    message(STATUS "Discord Rich Presence enabled (client ID from .env)")
+else()
+    message(STATUS "Discord Rich Presence disabled (no .env / DISCORD_CLIENT_ID — see .env.example)")
+endif()
 
 if(MSVC)
     target_compile_options(segmenter_core PRIVATE

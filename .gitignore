@@ -46,7 +46,6 @@ linux/dist/
 # Built packages
 *.deb
 *.rpm
-PKGBUILD
 
 # .NET & Windows
 [Bb]in/
@@ -75,6 +74,11 @@ windows/dotnet/dist/
 # Linux — native Qt 6 / C++ (shares core/ with the Windows port)
 linux/native/build/
 linux/native/dist/
+
+# Linux — Flatpak (.flatpak-builder/ and build/ self-ignore via their own
+# flatpak-generated .gitignore; these are ours)
+linux/native/flatpak/repo/
+linux/native/flatpak/.local-source.yml
 
 # Linux — PySide6
 linux/.venv/

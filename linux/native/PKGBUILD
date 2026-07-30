@@ -1,0 +1,56 @@
+# Maintainer: Kryštof Malinda <lynder063@users.noreply.github.com>
+#
+# Tracks main directly: the repository has no stable version tags yet (the one
+# existing tag, v1, predates the native Qt 6 port entirely and points at the
+# old WPF-only tree), so a tag-pinned PKGBUILD would either be unbuildable or
+# silently package the wrong source. Once releases are cut on a v1.0.0-style
+# schedule, this can switch to a tagged tarball with real sha256sums instead
+# of a VCS source.
+#
+# Builds only linux/native — core/ is pulled in automatically because it is
+# a relative ../../core add_subdirectory() from linux/native/CMakeLists.txt,
+# and git clones the whole repository tree, not just the linux/ subdirectory.
+
+pkgname=segmenter-git
+pkgver=1.0.0.r0.g0000000
+pkgrel=1
+pkgdesc="Visual timestamp annotation and automatic AI segment detection for video files"
+arch=('x86_64')
+url="https://github.com/Lynder063/segmenter"
+license=('MIT')
+depends=('qt6-base' 'vlc' 'hicolor-icon-theme')
+optdepends=(
+    'libsecret: store API keys in the Secret Service keyring instead of a permission-restricted file'
+    'tesseract: visual pass that tells closing credits from a next-episode preview'
+    'tesseract-data-eng: English language data for the visual pass'
+    'ffmpeg: frame strip, waveform and RCD scanning'
+)
+makedepends=('cmake' 'ninja' 'pkgconf' 'git')
+provides=('segmenter')
+conflicts=('segmenter')
+source=("$pkgname::git+https://github.com/Lynder063/segmenter.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$pkgname"
+    # CMakeLists.txt sets project(Segmenter VERSION 1.0.0), so that number is
+    # the base; .rN.gHASH (git describe's own scheme) makes every commit
+    # produce a distinct, monotonically increasing version even between tags.
+    printf '1.0.0.r%s.g%s' \
+        "$(git rev-list --count HEAD)" \
+        "$(git rev-parse --short HEAD)"
+}
+
+build() {
+    cd "$pkgname/linux/native"
+    cmake -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr
+    cmake --build build
+}
+
+package() {
+    cd "$pkgname/linux/native"
+    DESTDIR="$pkgdir" cmake --install build
+    install -Dm644 "$srcdir/$pkgname/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

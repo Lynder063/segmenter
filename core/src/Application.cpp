@@ -96,7 +96,18 @@ int runApplication(int argc, char *argv[])
     app.setApplicationDisplayName(QStringLiteral("Segmenter"));
     app.setOrganizationName(QStringLiteral("Segmenter"));
     app.setApplicationVersion(QStringLiteral(SEGMENTER_VERSION));
-    app.setDesktopFileName(QStringLiteral("segmenter"));
+    // The installed .desktop file's basename varies by packaging: plain
+    // "segmenter" for the .deb/.rpm/AppImage/PKGBUILD (all install
+    // segmenter.desktop), but Flatpak renames it to the app-id
+    // (dev.lynder.Segmenter.desktop) because that's a hard requirement of
+    // its portal sandboxing — xdg-desktop-portal validates every portal call
+    // (file dialogs, secrets, notifications) against /.flatpak-info's
+    // recorded app-id, and rejects them on a mismatch. Flatpak always
+    // exports FLATPAK_ID into the sandbox, so preferring it when set keeps
+    // this correct for both without a compile-time branch.
+    const QByteArray flatpakId = qgetenv("FLATPAK_ID");
+    app.setDesktopFileName(flatpakId.isEmpty() ? QStringLiteral("segmenter")
+                                                : QString::fromUtf8(flatpakId));
     app.setWindowIcon(QIcon(QStringLiteral(":/resources/app_icon.png")));
 
     LoggerService::instance().info(

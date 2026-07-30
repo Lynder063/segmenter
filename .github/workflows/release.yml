@@ -29,6 +29,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # DISCORD_CLIENT_ID is an optional repo secret. CMake reads .env at
+      # configure time (core/CMakeLists.txt) and only enables Discord Rich
+      # Presence when it finds a non-empty value — an unset secret makes this
+      # write an empty line, which is the same as no .env at all.
+      - name: Write .env
+        run: echo "DISCORD_CLIENT_ID=${{ secrets.DISCORD_CLIENT_ID }}" > .env
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -38,7 +45,7 @@ jobs:
             libvlc-dev vlc-plugin-base \
             libsecret-1-dev \
             libtesseract-dev tesseract-ocr tesseract-ocr-eng \
-            dpkg-dev fakeroot desktop-file-utils \
+            dpkg-dev rpm fakeroot desktop-file-utils \
             libegl1 libxkbcommon-x11-0 libxcb-cursor0 libgl1 \
             file curl ffmpeg
 
@@ -47,7 +54,7 @@ jobs:
           chmod +x linux/native/build.sh linux/native/package.sh
           ./linux/native/build.sh
 
-      - name: Package (.deb + AppImage)
+      - name: Package (.deb + .rpm + AppImage)
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           [ "${VERSION}" = "${GITHUB_REF_NAME}" ] && VERSION="1.0.0"
@@ -67,10 +74,15 @@ jobs:
           env -u QT_PLUGIN_PATH -u LD_LIBRARY_PATH QT_QPA_PLATFORM=offscreen \
             "${APPIMAGE}" --appimage-extract-and-run --scan /nonexistent | tail -1
 
+          # Ubuntu can't install an .rpm to actually run it — just check rpmbuild
+          # produced one with the files it should have.
+          RPM="$(ls linux/native/dist/*.rpm)"
+          rpm -qlp "${RPM}" | grep -q '/usr/bin/Segmenter'
+
       - name: Collect artifacts
         run: |
           mkdir -p artifacts
-          cp linux/native/dist/*.deb linux/native/dist/*.AppImage artifacts/
+          cp linux/native/dist/*.deb linux/native/dist/*.rpm linux/native/dist/*.AppImage artifacts/
           # PKGBUILD is a recipe rather than a built package, but it is what an
           # Arch user actually wants, so it ships alongside the binaries.
           if [ -f linux/native/PKGBUILD ]; then cp linux/native/PKGBUILD artifacts/; fi
@@ -82,11 +94,59 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
 
+  flatpak:
+    name: Linux (Flatpak)
+    runs-on: ubuntu-24.04
+    # Compiles ffmpeg and libvlc from source inside the sandbox — the slowest
+    # job in this workflow by a wide margin, and the newest/least battle-tested
+    # packaging format here. continue-on-error plus the `if` guards below on
+    # the release job mean a flatpak-builder failure never blocks shipping the
+    # .deb/.rpm/AppImage/Windows build; it just ships without this one format.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install --noninteractive flathub org.kde.Platform//6.11 org.kde.Sdk//6.11
+
+      - name: Build
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "${VERSION}" = "${GITHUB_REF_NAME}" ] && VERSION="1.0.0"
+          chmod +x linux/native/flatpak/build.sh
+          # --local-source: build this checkout's commit, not main — a tag push
+          # and its HEAD are usually the same commit, but relying on that would
+          # make a workflow_dispatch run silently build whatever main currently
+          # is instead of the ref actually being tested.
+          linux/native/flatpak/build.sh --version "${VERSION}" --local-source
+
+      - name: Smoke-test the bundle
+        run: |
+          set -e
+          BUNDLE="$(ls linux/native/dist/*.flatpak)"
+          flatpak install --noninteractive --user "${BUNDLE}"
+          QT_QPA_PLATFORM=offscreen flatpak run dev.lynder.Segmenter --scan /nonexistent | tail -1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-flatpak
+          path: linux/native/dist/*.flatpak
+          if-no-files-found: error
+
   windows:
     name: Windows (Qt 6 / C++)
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+
+      # See the Linux job's "Write .env" step — same optional-secret handling.
+      - name: Write .env
+        shell: pwsh
+        run: "Set-Content -Path .env -Value \"DISCORD_CLIENT_ID=${{ secrets.DISCORD_CLIENT_ID }}\""
 
       - uses: ilammy/msvc-dev-cmd@v1
         with:
@@ -144,7 +204,7 @@ jobs:
 
   release:
     name: Publish release
-    needs: [linux, windows]
+    needs: [linux, windows, flatpak]
     runs-on: ubuntu-latest
     # Manual runs build and upload artifacts but deliberately stop short of
     # publishing, so the workflow can be exercised without cutting a release.
@@ -171,16 +231,24 @@ jobs:
             | Platform | File |
             |---|---|
             | Debian / Ubuntu / Mint | `segmenter_*_amd64.deb` — `sudo apt install ./segmenter_*.deb` |
-            | Fedora, Arch, openSUSE, any other Linux | `Segmenter-*-x86_64.AppImage` — `chmod +x` and run |
+            | Fedora / RHEL / openSUSE | `segmenter-*.x86_64.rpm` — `sudo dnf install ./segmenter-*.rpm` |
+            | Arch / Manjaro | `PKGBUILD` — drop it in a directory and run `makepkg -si` |
+            | Sandboxed, any distro | `Segmenter-*-x86_64.flatpak` — `flatpak install ./Segmenter-*.flatpak` |
+            | Any Linux (no install) | `Segmenter-*-x86_64.AppImage` — `chmod +x` and run |
             | Windows 10/11 x64 | `Segmenter-windows-x64.zip` — unzip and run `Segmenter.exe` |
 
-            The AppImage bundles Qt and needs no installation; the `.deb` is
-            smaller because it uses the Qt and VLC your distribution already ships.
+            The AppImage bundles Qt and needs no installation; the Flatpak is
+            fully sandboxed and bundles its own ffmpeg/libvlc; the `.deb`/`.rpm`
+            are smaller because they use the Qt and VLC your distribution
+            already ships.
 
             `ffmpeg` and `ffprobe` must be on `PATH` for the frame strip, the
-            waveform and RCD scanning:
-            `sudo apt install ffmpeg` / `winget install Gyan.FFmpeg`.
+            waveform and RCD scanning (the Flatpak already bundles them):
+            `sudo apt install ffmpeg` / `sudo dnf install ffmpeg-free` /
+            `winget install Gyan.FFmpeg`.
 
-            Optional on Linux: `libsecret-1-0` stores API keys in your keyring
-            instead of a permission-restricted file, and `tesseract-ocr-eng`
-            enables the visual pass that tells closing credits from a preview.
+            Optional on Linux (already included in the Flatpak): `libsecret-1-0`
+            /`libsecret` stores API keys in your keyring instead of a
+            permission-restricted file, and `tesseract-ocr-eng`/
+            `tesseract-langpack-eng` enables the visual pass that tells closing
+            credits from a preview.

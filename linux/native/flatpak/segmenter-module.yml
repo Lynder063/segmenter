@@ -1,0 +1,22 @@
+name: segmenter
+buildsystem: cmake-ninja
+subdir: linux/native
+config-opts:
+  - -DCMAKE_BUILD_TYPE=Release
+# CMakeLists.txt installs segmenter.desktop / segmenter.png — plain names
+# that are correct for a system install but collide with Flatpak's rule
+# that the desktop file and icon must be named after the app-id. Renaming
+# here (rather than in CMakeLists.txt) keeps that file the same for the
+# .deb/.rpm/AppImage builds in ../package.sh, which already reference
+# "segmenter.desktop" / "segmenter.png" by name — this is the same fixup
+# VLC's own Flatpak manifest applies to its own vlc.desktop for the same
+# reason.
+post-install:
+  - mv /app/share/applications/segmenter.desktop /app/share/applications/dev.lynder.Segmenter.desktop
+  - sed -i -e 's/Icon=segmenter/Icon=dev.lynder.Segmenter/' /app/share/applications/dev.lynder.Segmenter.desktop
+  - mv /app/share/icons/hicolor/256x256/apps/segmenter.png /app/share/icons/hicolor/256x256/apps/dev.lynder.Segmenter.png
+  - install -Dm644 flatpak/dev.lynder.Segmenter.appdata.xml /app/share/metainfo/dev.lynder.Segmenter.appdata.xml
+sources:
+  - type: git
+    url: https://github.com/Lynder063/segmenter.git
+    branch: main

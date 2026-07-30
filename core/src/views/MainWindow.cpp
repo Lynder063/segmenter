@@ -20,6 +20,7 @@
 #include "services/ApiClient.h"
 #include "services/AudioExtractorService.h"
 #include "platform/CredentialStore.h"
+#include "services/DiscordRpcService.h"
 #include "services/FFmpegService.h"
 #include "services/FilenameMediaParser.h"
 #include "services/LoggerService.h"
@@ -60,6 +61,8 @@ MainWindow::MainWindow(QWidget *parent)
     } else {
         setStatusInfo(tr("Ready."));
     }
+
+    DiscordRpcService::instance().setIdle();
 }
 
 MainWindow::~MainWindow() = default;
@@ -151,12 +154,15 @@ void MainWindow::buildTransportBar(QWidget *parent, QLayout *parentLayout)
     layout->addWidget(m_playButton);
 
     m_stepBackButton = new QToolButton(bar);
-    m_stepBackButton->setText(QStringLiteral("⏪"));
+    // U+23F4/U+23F5 (Miscellaneous Symbols and Arrows) rather than U+23EA/
+    // U+23E9: those default to full-colour emoji presentation, these render
+    // as plain glyphs like the ▶ play button already does.
+    m_stepBackButton->setText(QStringLiteral("⏴"));
     m_stepBackButton->setToolTip(tr("Step one frame back (Left / ,)"));
     layout->addWidget(m_stepBackButton);
 
     m_stepForwardButton = new QToolButton(bar);
-    m_stepForwardButton->setText(QStringLiteral("⏩"));
+    m_stepForwardButton->setText(QStringLiteral("⏵"));
     m_stepForwardButton->setToolTip(tr("Step one frame forward (Right / .)"));
     layout->addWidget(m_stepForwardButton);
 
@@ -211,7 +217,9 @@ void MainWindow::buildZoomToolbar(QWidget *parent, QLayout *parentLayout)
     layout->addWidget(resetZoom);
 
     auto *scope = new QToolButton(bar);
-    scope->setText(QStringLiteral("🎯 Scope"));
+    // U+2316 POSITION INDICATOR (Miscellaneous Technical) — a crosshair glyph
+    // that reads as plain text rather than the 🎯 emoji it replaces.
+    scope->setText(QStringLiteral("⌖ Scope"));
     scope->setToolTip(tr("Centre the timeline on the playhead"));
     layout->addWidget(scope);
 
@@ -423,6 +431,8 @@ void MainWindow::loadVideo(const QString &filePath)
         m_sidebar->setLookupHint(tr("TMDB Key missing. Fill key to lookup."));
     }
 
+    DiscordRpcService::instance().setVideoLoaded(fileName);
+
     startAudioAnalysis();
     setStatusSuccess(tr("Loaded %1").arg(fileName));
 }
@@ -432,6 +442,8 @@ void MainWindow::startAudioAnalysis()
     if (m_videoPath.isEmpty() || !FFmpegService::instance().hasBinaries()) {
         return;
     }
+
+    DiscordRpcService::instance().setAnalyzing(QFileInfo(m_videoPath).fileName());
 
     const QString path = m_videoPath;
     const int durationMs = static_cast<int>(m_durationMs);
@@ -500,6 +512,15 @@ void MainWindow::onPlayerDurationChanged(qint64 milliseconds)
 void MainWindow::onPlayingStateChanged(bool playing)
 {
     m_playButton->setText(playing ? QStringLiteral("⏸") : QStringLiteral("▶"));
+
+    if (!m_videoPath.isEmpty()) {
+        const QString fileName = QFileInfo(m_videoPath).fileName();
+        if (playing) {
+            DiscordRpcService::instance().setPlaying(fileName, m_playheadMs, m_durationMs);
+        } else {
+            DiscordRpcService::instance().setPaused(fileName, m_playheadMs, m_durationMs);
+        }
+    }
 }
 
 // MARK: - Drafts
@@ -968,6 +989,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
         }
     }
 
+    DiscordRpcService::instance().clear();
     event->accept();
 }
 

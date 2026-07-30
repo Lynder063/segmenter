@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QImage>
+#include <QMutex>
 #include <QString>
 #include <QWidget>
 
@@ -9,10 +11,22 @@ class QTimer;
 
 namespace segmenter {
 
-/// LibVLC playback surface. VLC renders straight into this widget's native
-/// window handle, which is what gives the same "plays anything" coverage the
-/// macOS build gets — MKV, HEVC, AC3, DTS and 10-bit HDR included — with
-/// DirectX hardware decoding underneath.
+/// LibVLC playback surface.
+///
+/// On Windows, VLC renders straight into this widget's native HWND — zero
+/// copy, DirectX hardware decoding underneath.
+///
+/// On Linux this instead uses LibVLC's raw video callbacks
+/// (libvlc_video_set_callbacks): VLC has no public embedding API for Wayland
+/// surfaces the way it does for X11 windows (libvlc_media_player_set_xwindow)
+/// or Win32 HWNDs, and the project targets Wayland rather than falling back
+/// to XWayland. Decoded frames land in a plain RGB32 buffer that this widget
+/// paints itself, which works identically under X11 and Wayland because it
+/// never asks LibVLC to own a window at all. Hardware *decode* is unaffected
+/// (--avcodec-hw=any in VlcVideoPlayer.cpp); only the final blit to screen
+/// becomes a CPU copy instead of direct scanout, which a timestamp-annotation
+/// tool built around frame-by-frame stepping is not sensitive to the way a
+/// general-purpose player would be.
 class VlcVideoPlayer : public QWidget {
     Q_OBJECT
 
@@ -67,12 +81,35 @@ signals:
     void errorOccurred(const QString &message);
 
 protected:
+#ifdef Q_OS_WIN
     // The widget owns a native window that VLC draws into, so Qt must not
     // paint over it or try to composite it.
     QPaintEngine *paintEngine() const override { return nullptr; }
+#else
+    // Linux paints the frame LibVLC's callbacks deposit into m_frontBuffer —
+    // see the class comment above for why.
+    void paintEvent(QPaintEvent *event) override;
+#endif
 
 private:
     void pollState();
+
+#ifndef Q_OS_WIN
+    static unsigned formatCallback(void **opaque, char *chroma,
+                                    unsigned *width, unsigned *height,
+                                    unsigned *pitches, unsigned *lines);
+    static void *lockCallback(void *opaque, void **planes);
+    static void unlockCallback(void *opaque, void *picture, void *const *planes);
+    static void displayCallback(void *opaque, void *picture);
+
+    // Written by lockCallback/unlockCallback on LibVLC's decode thread,
+    // swapped into m_frontBuffer by displayCallback (also LibVLC's thread)
+    // and read by paintEvent on the GUI thread — m_frameMutex guards every
+    // access to either image from any thread.
+    QMutex m_frameMutex;
+    QImage m_backBuffer;
+    QImage m_frontBuffer;
+#endif
 
     libvlc_instance_t *m_instance = nullptr;
     libvlc_media_player_t *m_player = nullptr;

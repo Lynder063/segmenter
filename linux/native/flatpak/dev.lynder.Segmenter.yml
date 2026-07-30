@@ -1,0 +1,112 @@
+# Flatpak manifest for the native Qt 6 / C++ Linux port.
+#
+# The app-id is dev.lynder.Segmenter — reverse-DNS of lynder.dev, which is
+# actually owned by this project's author, rather than org.theintrodb.Segmenter:
+# Flathub requires proof of ownership of whatever domain an app-id is rooted
+# in, and this project doesn't control theintrodb.org — it's a third-party API
+# this app submits to, not the app's own identity. CredentialStore.cpp's
+# libsecret schema name ("org.theintrodb.Segmenter") is unrelated — a D-Bus
+# Secret Service schema, not a Flatpak sandbox id — and is left as-is.
+#
+# Builds only three modules beyond the app itself:
+#   libsecret  - same keyring backend CredentialStore.cpp already speaks to on
+#                a non-sandboxed install; small and has a ready shared-modules
+#                recipe, so there is no reason to fall back to the
+#                permission-restricted file store in here.
+#   ffmpeg     - decoder library for VlcVideoPlayer AND the ffmpeg/ffprobe
+#                binaries FFmpegService/AudioExtractorService shell out to.
+#                Default (LGPL-only) configuration: this app only ever
+#                decodes, so the GPL encoder libraries VLC's own Flatpak
+#                builds (x264, x265) are not needed — ffmpeg's native
+#                decoders already cover H.264, HEVC, AC3, DTS and 10-bit
+#                without them.
+#   vlc        - libvlc/libvlccore + playback plugins only. `--disable-vlc`
+#                skips VLC's own Qt interface/CLI entirely, because this app
+#                never runs the vlc binary — it drives libvlc directly, same
+#                as every other platform's video player view.
+#
+# Tesseract (the OCR backend) is deliberately not bundled: it is already an
+# optional, gracefully-degrading dependency on every platform (see
+# ../src/platform/OcrService.cpp and CMakeLists.txt's TESSERACT_FOUND branch)
+# and pulling in tesseract + leptonica from source is a much larger build for
+# a feature the app already knows how to run without. A flatpak build without
+# it just does what an --without-tesseract native build already does: audio-
+# only detection, reported as such in the scan dialog.
+app-id: dev.lynder.Segmenter
+runtime: org.kde.Platform
+runtime-version: '6.11'
+sdk: org.kde.Sdk
+command: Segmenter
+
+finish-args:
+  - --share=ipc
+  - --share=network            # TheIntroDB / IntroDB / TMDB API calls
+  - --socket=x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --device=dri                # VA-API/VDPAU decode, GL video output
+  # Season folders can live anywhere — external drives, NAS mounts, whatever
+  # the user has — so this asks for the same broad access VLC's own Flatpak
+  # requests for the identical reason, rather than fight the portal file
+  # picker through a directory-tree scan.
+  - --filesystem=host
+  - --talk-name=org.freedesktop.secrets
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /lib/cmake
+  - /lib/*.la
+  - /share/man
+  - /share/gtk-doc
+
+modules:
+  # https://github.com/flathub/shared-modules/blob/master/libsecret/libsecret.json
+  - name: libsecret
+    buildsystem: meson
+    config-opts:
+      - -Dmanpage=false
+      - -Dvapi=false
+      - -Dgtk_doc=false
+      - -Dintrospection=false
+    cleanup:
+      - /bin
+      - /include
+      - /lib/pkgconfig
+      - /share/man
+    sources:
+      - type: archive
+        url: https://download.gnome.org/sources/libsecret/0.21/libsecret-0.21.7.tar.xz
+        sha256: 6b452e4750590a2b5617adc40026f28d2f4903de15f1250e1d1c40bfd68ed55e
+
+  - name: ffmpeg
+    config-opts:
+      - --enable-shared
+      - --disable-static
+      - --disable-doc
+    sources:
+      - type: archive
+        url: https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
+        sha256: 464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c
+
+  - name: vlc
+    config-opts:
+      # VLC's build compiles a couple of host tools it runs on itself during
+      # the build; BUILDCC is that native compiler, distinct from the
+      # (identical, here) target one. Same flag VLC's own Flatpak passes.
+      - BUILDCC=/usr/bin/gcc -std=gnu99
+      - --disable-vlc
+      - --disable-qt
+      - --disable-skins2
+      - --disable-ncurses
+      - --disable-lua
+      - --disable-a52
+      - --disable-update-check
+    sources:
+      - type: archive
+        url: https://download.videolan.org/videolan/vlc/3.0.23/vlc-3.0.23.tar.xz
+        sha256: e891cae6aa3ccda69bf94173d5105cbc55c7a7d9b1d21b9b21666e69eff3e7e0
+
+  # Split out so build.sh --local-source can swap it for
+  # segmenter-module.local.yml without touching this file.
+  - segmenter-module.yml

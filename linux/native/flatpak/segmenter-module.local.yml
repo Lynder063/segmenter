@@ -1,0 +1,20 @@
+# Same as segmenter-module.yml, except it builds this checkout directly
+# instead of cloning github.com/Lynder063/segmenter. Used by
+# `./build.sh --local-source` while iterating on the manifest itself, so a
+# change doesn't have to be pushed to be tested. Real builds — and Flathub
+# submission — use segmenter-module.yml instead, which is what
+# dev.lynder.Segmenter.yml references by default.
+name: segmenter
+buildsystem: cmake-ninja
+subdir: linux/native
+config-opts:
+  - -DCMAKE_BUILD_TYPE=Release
+post-install:
+  - mv /app/share/applications/segmenter.desktop /app/share/applications/dev.lynder.Segmenter.desktop
+  - sed -i -e 's/Icon=segmenter/Icon=dev.lynder.Segmenter/' /app/share/applications/dev.lynder.Segmenter.desktop
+  - mv /app/share/icons/hicolor/256x256/apps/segmenter.png /app/share/icons/hicolor/256x256/apps/dev.lynder.Segmenter.png
+  - install -Dm644 flatpak/dev.lynder.Segmenter.appdata.xml /app/share/metainfo/dev.lynder.Segmenter.appdata.xml
+sources:
+  - type: dir
+    path: ../../..
+    skip: ['.git', 'mac', 'windows', 'docs']

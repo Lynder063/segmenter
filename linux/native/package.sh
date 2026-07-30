@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Packages the native Linux build as a .deb and an AppImage.
+# Packages the native Linux build as a .deb, an .rpm and an AppImage, and
+# copies the Arch PKGBUILD alongside them.
 #
-# The .deb declares its Qt/VLC dependencies and lets the distribution supply
-# them; the AppImage bundles everything and runs on any glibc distribution at
-# least as old as the build host. Between them they cover the popular distros
-# without needing one build per package format.
+# The .deb and .rpm declare their Qt/VLC dependencies and let the distribution
+# supply them; the AppImage bundles everything and runs on any glibc
+# distribution at least as old as the build host. Between the three of them
+# they cover the popular distros without needing one build per format — the
+# PKGBUILD is the one exception, since Arch wants a source recipe rather than
+# a prebuilt binary (see PKGBUILD's own header comment for why).
 #
 # Expects ./build.sh to have run first.
 #
@@ -49,6 +52,11 @@ cp -a "${STAGE_DIR}/usr" "${DEB_ROOT}/"
 
 # Depends is deliberately loose on minor versions: pinning exact Qt point
 # releases would make the package uninstallable on the next distro update.
+#
+# qadwaitadecorations-qt6 in Recommends: GNOME's Mutter does not implement
+# server-side window decoration, so Qt falls back to drawing its own — and
+# without this plugin installed, main.cpp's QT_WAYLAND_DECORATION=adwaita
+# silently has nothing to select, falling through to Qt's default plugin.
 cat > "${DEB_ROOT}/DEBIAN/control" <<CONTROL
 Package: segmenter
 Version: ${VERSION}
@@ -56,7 +64,7 @@ Section: video
 Priority: optional
 Architecture: amd64
 Depends: libqt6widgets6 (>= 6.4), libqt6network6 (>= 6.4), libqt6concurrent6 (>= 6.4), libvlc5, libc6
-Recommends: ffmpeg, libsecret-1-0, tesseract-ocr, tesseract-ocr-eng, vlc-plugin-base
+Recommends: ffmpeg, libsecret-1-0, tesseract-ocr, tesseract-ocr-eng, vlc-plugin-base, qadwaitadecorations-qt6
 Maintainer: Kryštof Malinda <lynder063@users.noreply.github.com>
 Description: Visual timestamp annotation and automatic segment detection
  Detect, edit and submit Intro, Recap, Credits and Preview markers for video
@@ -69,6 +77,78 @@ CONTROL
 dpkg-deb --build --root-owner-group "${DEB_ROOT}" \
     "${DIST_DIR}/segmenter_${VERSION}_amd64.deb" >/dev/null
 echo "  -> ${DIST_DIR}/segmenter_${VERSION}_amd64.deb"
+
+# --- .rpm ----------------------------------------------------------------------
+if command -v rpmbuild >/dev/null; then
+    echo "Building .rpm..."
+    RPM_TOPDIR="${BUILD_DIR}/rpm"
+    rm -rf "${RPM_TOPDIR}"
+    mkdir -p "${RPM_TOPDIR}"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+    tar -czf "${RPM_TOPDIR}/SOURCES/segmenter-${VERSION}.tar.gz" -C "${STAGE_DIR}" usr
+    cp "${SCRIPT_DIR}/../../LICENSE" "${RPM_TOPDIR}/SOURCES/LICENSE"
+
+    # Repackages the same staged tree as the .deb above rather than rebuilding
+    # from source — rpmbuild's own dependency scanner still adds the precise
+    # library-level Requires by reading the staged binary; qt6-qtbase/vlc-libs
+    # below are just the human-readable package names on top of that, loose on
+    # minor versions for the same reason the .deb's Depends is.
+    cat > "${RPM_TOPDIR}/SPECS/segmenter.spec" <<SPEC
+# The binary here is already-built and (per CMakeLists.txt's Release flags)
+# already stripped — there is no debuginfo for rpmbuild to extract, so its
+# automatic debuginfo subpackage would otherwise fail on an empty file list.
+%global debug_package %{nil}
+
+Name:           segmenter
+Version:        ${VERSION}
+Release:        1%{?dist}
+Summary:        Visual timestamp annotation and automatic segment detection
+License:        MIT
+URL:            https://github.com/Lynder063/segmenter
+Source0:        segmenter-${VERSION}.tar.gz
+Source1:        LICENSE
+BuildArch:      x86_64
+
+Requires:       qt6-qtbase >= 6.5, qt6-qtbase-gui >= 6.5, vlc-libs
+Recommends:     ffmpeg-free, libsecret, tesseract, tesseract-langpack-eng, qt6-qtwayland-adwaita-decoration
+
+%description
+Detect, edit and submit Intro, Recap, Credits and Preview markers for video
+files, and upload them to TheIntroDB and IntroDB.
+
+Season fingerprinting cross-correlates the audio of every episode in a folder
+to locate recurring intros and credits automatically.
+
+%prep
+%setup -q -c -n stage
+cp %{SOURCE1} .
+
+%install
+rm -rf %{buildroot}
+mkdir -p %{buildroot}
+cp -a usr %{buildroot}/
+
+%files
+%license LICENSE
+/usr/bin/Segmenter
+/usr/share/icons/hicolor/256x256/apps/segmenter.png
+/usr/share/applications/segmenter.desktop
+
+%changelog
+* $(LC_ALL=C date "+%a %b %d %Y") Kryštof Malinda <lynder063@users.noreply.github.com> - ${VERSION}-1
+- Native Qt 6 / C++ Linux port
+SPEC
+
+    if rpmbuild --define "_topdir ${RPM_TOPDIR}" -bb "${RPM_TOPDIR}/SPECS/segmenter.spec" >/dev/null; then
+        RPM_FILE="$(find "${RPM_TOPDIR}/RPMS" -name '*.rpm' | head -1)"
+        cp "${RPM_FILE}" "${DIST_DIR}/"
+        echo "  -> ${DIST_DIR}/$(basename "${RPM_FILE}")"
+    else
+        echo "  rpmbuild failed — skipping .rpm." >&2
+    fi
+else
+    echo "rpmbuild not found — skipping .rpm. Install the rpm-build package to enable it." >&2
+fi
 
 # --- AppImage ----------------------------------------------------------------
 echo "Building AppImage..."
@@ -129,6 +209,15 @@ if fetch_tool linuxdeploy "${BASE}/linuxdeploy-x86_64.AppImage" \
     fi
 else
     echo "  could not fetch linuxdeploy — skipping AppImage." >&2
+fi
+
+# --- PKGBUILD --------------------------------------------------------------
+# A recipe, not a built package — makepkg needs Arch to run — but copying it
+# alongside the real packages means a local ./package.sh run produces the same
+# complete dist/ that CI's release.yml assembles from these two sources.
+if [[ -f "${SCRIPT_DIR}/PKGBUILD" ]]; then
+    cp "${SCRIPT_DIR}/PKGBUILD" "${DIST_DIR}/"
+    echo "  -> ${DIST_DIR}/PKGBUILD (Arch/AUR recipe, not a built package)"
 fi
 
 echo

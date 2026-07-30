@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.lynder.Segmenter</id>
+  <name>Segmenter</name>
+  <summary>Visual timestamp annotation and automatic segment detection</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="dev.lynder">
+    <name>Kryštof Malinda</name>
+  </developer>
+
+  <description>
+    <p>
+      Segmenter detects, edits and submits video segment markers — Intro,
+      Recap, Credits and Preview — to TheIntroDB and IntroDB. Season
+      fingerprinting cross-correlates the audio of every episode in a folder
+      to locate recurring intros and credits automatically, with an optional
+      visual pass that tells closing credits apart from a next-episode
+      preview.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Frame-accurate LibVLC playback with hardware decoding</li>
+      <li>Zoomable multi-track timeline with direct segment editing</li>
+      <li>Four RCD detection methods, from pure audio to multimodal audio+vision fusion</li>
+      <li>Real-time frame strip for precise boundary placement</li>
+      <li>Full TheIntroDB v3 API submission support</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">dev.lynder.Segmenter.desktop</launchable>
+
+  <url type="homepage">https://github.com/Lynder063/segmenter</url>
+  <url type="bugtracker">https://github.com/Lynder063/segmenter/issues</url>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="1.0.0" date="2026-07-30">
+      <description>
+        <p>Native Qt 6 / C++ Linux port, sharing its application core with the Windows build.</p>
+      </description>
+    </release>
+  </releases>
+</component>
