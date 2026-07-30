@@ -8,6 +8,14 @@
 
 **Segmenter** is a high-performance visual timestamp annotation and automatic AI segment detection application for macOS (Universal Binary `arm64` + `x86_64`), Linux, and Windows. It enables users to detect, create, edit, and submit video segment markers — **Intro**, **Recap**, **Credits**, and **Preview** — to [TheIntroDB](https://theintrodb.org) (v3 API) and [IntroDB](https://introdb.app).
 
+## Why?
+I wanted to build an open-source, cross-platform tool to make creating segments easier for everyone. I hope my project will help populate TheIntroDB database. I'm just doing this for the love of the game.
+
+> *"In a world where you can be anything, choose to be kind."* — Nitya Prakash
+
+Sending love to everyone who uses my software,  
+**Kryštof "Lynder063" Malinda**❤️
+
 ---
 
 ## ✨ Key Native Features (macOS Native App)
