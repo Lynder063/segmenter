@@ -36,6 +36,15 @@ jobs:
       - name: Write .env
         run: echo "DISCORD_CLIENT_ID=${{ secrets.DISCORD_CLIENT_ID }}" > .env
 
+      # Ubuntu 22.04's own qt6-base-dev is 6.2.4 — below the 6.5 floor
+      # core/CMakeLists.txt requires. This PPA is the standard source for a
+      # current Qt6 on 22.04 and keeps build-time and runtime Qt from the same
+      # apt/dpkg lineage, unlike installing a separate copy via aqt would
+      # (linking against a newer Qt than the .deb's own Depends: resolves to
+      # at smoke-test/install time risks an ABI mismatch at runtime).
+      - name: Add Kubuntu backports PPA (current Qt6)
+        run: sudo add-apt-repository -y ppa:kubuntu-ppa/backports
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -109,7 +118,9 @@ jobs:
       - name: Install flatpak-builder
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder
+          # elfutils: flatpak-builder's debuginfo-extraction step shells out to
+          # eu-strip, which isn't pulled in by flatpak-builder itself.
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder elfutils
           sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install --noninteractive flathub org.kde.Platform//6.11 org.kde.Sdk//6.11
 
@@ -152,6 +163,11 @@ jobs:
         with:
           arch: x64
 
+      # dir: C:\Qt because that is one of the fixed locations
+      # windows/native/build.ps1 searches (SEGMENTER_QT_ROOT is the escape
+      # hatch for anywhere else) — install-qt-action's own default install
+      # location doesn't match it, which is what "Qt 6 (msvc2022_64) not
+      # found" from build.ps1 actually means.
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
@@ -159,6 +175,7 @@ jobs:
           host: windows
           target: desktop
           arch: win64_msvc2022_64
+          dir: 'C:\Qt'
           cache: true
 
       # The LibVLC SDK is not committed to the repository. The NuGet package is
@@ -202,9 +219,48 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
 
+  macos:
+    name: macOS (Swift / VLCKit)
+    # arm64 runner; swift build cross-compiles the x86_64 slice from the same
+    # Xcode SDK rather than needing actual Intel hardware.
+    runs-on: macos-14
+    # Untested in CI so far — the native macOS build has only ever been run
+    # locally by the maintainer. continue-on-error means a build-environment
+    # surprise here does not block shipping Linux/Windows.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ffmpeg
+        run: brew install ffmpeg
+
+      - name: Build
+        run: |
+          chmod +x mac/native/build.sh
+          ./mac/native/build.sh
+
+      - name: Smoke-test the app bundle
+        run: |
+          set -e
+          file mac/native/dist/Segmenter.app/Contents/MacOS/Segmenter
+          lipo -info mac/native/dist/Segmenter.app/Contents/MacOS/Segmenter
+
+      - name: Package
+        run: |
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent \
+            mac/native/dist/Segmenter.app artifacts/Segmenter-macos-universal.zip
+          ls -lh artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-package
+          path: artifacts/*
+          if-no-files-found: error
+
   release:
     name: Publish release
-    needs: [linux, windows, flatpak]
+    needs: [linux, windows, flatpak, macos]
     runs-on: ubuntu-latest
     # Manual runs build and upload artifacts but deliberately stop short of
     # publishing, so the workflow can be exercised without cutting a release.
@@ -236,6 +292,7 @@ jobs:
             | Sandboxed, any distro | `Segmenter-*-x86_64.flatpak` — `flatpak install ./Segmenter-*.flatpak` |
             | Any Linux (no install) | `Segmenter-*-x86_64.AppImage` — `chmod +x` and run |
             | Windows 10/11 x64 | `Segmenter-windows-x64.zip` — unzip and run `Segmenter.exe` |
+            | macOS 12+ (Apple Silicon + Intel) | `Segmenter-macos-universal.zip` — unzip and run; unsigned, so right-click → Open the first time |
 
             The AppImage bundles Qt and needs no installation; the Flatpak is
             fully sandboxed and bundles its own ffmpeg/libvlc; the `.deb`/`.rpm`
