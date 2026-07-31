@@ -27,18 +27,23 @@ env:
   LIBVLC_VERSION: 3.0.21
 
 jobs:
-  # Compiles core/ once; linux-deb/linux-rpm/linux-appimage each package the
-  # same staged output as their own parallel, independently-failing job
-  # instead of one job doing all three in sequence — a .deb-only failure no
-  # longer hides whether .rpm/AppImage also would have worked, and none of
-  # the three need to wait on each other or re-run the C++ compile.
-  linux-build:
-    name: Linux (build)
-    # Deliberately not ubuntu-latest: an AppImage runs on any glibc at least
-    # as new as the one it was built against, so building on the oldest
-    # supported runner is what makes it work on older distributions too —
-    # matters here since linux-appimage reuses this job's staged output.
-    runs-on: ubuntu-22.04
+  # .deb and .rpm each compile inside a real container of their own target
+  # distro family rather than sharing one compile — checked against real CI
+  # data, neither Ubuntu LTS (22.04 or 24.04) actually ships Qt 6.5+, only
+  # Debian 13 does among mainstream .deb-family releases, and a binary linked
+  # against one distro's glibc/Qt ABI can't just be handed to another
+  # distro's packaging step. Each container's own apt/dnf has a current,
+  # correctly-matched Qt/libvlc — verified directly (podman run) before
+  # committing to this: debian:13 apt-get installs qt6-base-dev 6.8.2 and
+  # libvlc-dev 3.0.23 with nothing extra enabled; fedora:41 dnf installs
+  # qt6-qtbase-devel, vlc-devel and rpm-build with no RPM Fusion needed. This
+  # replaces the previous install-qt-action/kubuntu-PPA workarounds entirely
+  # for these two jobs.
+  linux-deb:
+    name: Linux (.deb, Debian 13)
+    runs-on: ubuntu-latest
+    container:
+      image: debian:13
     steps:
       - uses: actions/checkout@v4
 
@@ -49,13 +54,171 @@ jobs:
       - name: Write .env
         run: echo "DISCORD_CLIENT_ID=${{ secrets.DISCORD_CLIENT_ID }}" > .env
 
+      # No sudo inside a container job — it runs as root already.
+      - name: Install build & packaging dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ pkg-config \
+            qt6-base-dev qt6-base-dev-tools \
+            libvlc-dev vlc-plugin-base \
+            libsecret-1-dev \
+            libtesseract-dev tesseract-ocr tesseract-ocr-eng \
+            dpkg-dev fakeroot
+
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-deb-debian13
+
+      - name: Build
+        env:
+          SEGMENTER_CMAKE_EXTRA_ARGS: >-
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        run: |
+          chmod +x linux/native/build.sh
+          ./linux/native/build.sh
+
+      # A binary that builds but will not start is worse than a failed build,
+      # and both failure modes here are silent — a missing platform plugin
+      # only surfaces at runtime.
+      - name: Smoke-test the binary
+        run: QT_QPA_PLATFORM=offscreen linux/native/build/Release/bin/Segmenter --scan /nonexistent | tail -1
+
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "${VERSION}" = "${GITHUB_REF_NAME}" ] && VERSION="1.0.0"
+          chmod +x linux/native/package.sh
+          ./linux/native/package.sh --only deb --version "${VERSION}"
+
+      - name: Smoke-test the package
+        run: dpkg-deb -c linux/native/dist/*.deb | grep -q '/usr/bin/Segmenter'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-deb
+          # PKGBUILD rides along here (package.sh always copies it into dist/
+          # regardless of --only — see its own comment) since some job has to
+          # upload it and this one is as good as any; it's a recipe rather
+          # than a built package, but the one Arch users actually want.
+          path: |
+            linux/native/dist/*.deb
+            linux/native/dist/PKGBUILD
+          if-no-files-found: error
+
+  linux-rpm:
+    name: Linux (.rpm, Fedora 41)
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:41
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write .env
+        run: echo "DISCORD_CLIENT_ID=${{ secrets.DISCORD_CLIENT_ID }}" > .env
+
+      - name: Install build & packaging dependencies
+        run: |
+          dnf install -y \
+            cmake ninja-build gcc-c++ pkgconf-pkg-config \
+            qt6-qtbase-devel \
+            vlc-devel \
+            libsecret-devel \
+            tesseract-devel tesseract-langpack-eng \
+            rpm-build
+
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-rpm-fedora41
+
+      - name: Build
+        env:
+          SEGMENTER_CMAKE_EXTRA_ARGS: >-
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        run: |
+          chmod +x linux/native/build.sh
+          ./linux/native/build.sh
+
+      - name: Smoke-test the binary
+        run: QT_QPA_PLATFORM=offscreen linux/native/build/Release/bin/Segmenter --scan /nonexistent | tail -1
+
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "${VERSION}" = "${GITHUB_REF_NAME}" ] && VERSION="1.0.0"
+          chmod +x linux/native/package.sh
+          ./linux/native/package.sh --only rpm --version "${VERSION}"
+
+      - name: Smoke-test the package
+        run: rpm -qlp linux/native/dist/*.rpm | grep -q '/usr/bin/Segmenter'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-rpm
+          path: linux/native/dist/*.rpm
+          if-no-files-found: error
+
+  # Verifies linux/native/PKGBUILD actually builds — untested anywhere for
+  # this project's entire history until a real local `podman run archlinux`
+  # test during this session confirmed it works (makepkg -s successfully
+  # produced segmenter-git). No Arch environment existed anywhere this was
+  # developed before that. Not part of `release`'s needs: and uploads no
+  # artifact — Arch/AUR convention is building the PKGBUILD yourself via
+  # makepkg, not downloading a prebuilt binary the way .deb/.rpm users do, so
+  # this job exists purely to catch a PKGBUILD regression, not to ship
+  # anything.
+  linux-arch:
+    name: Linux (Arch, PKGBUILD)
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      # makepkg refuses to run as root — base-devel + a created non-root
+      # user with passwordless sudo is the standard pattern for running it
+      # inside a CI container.
+      - name: Install dependencies and create a non-root builder
+        run: |
+          pacman -Sy --noconfirm --needed base-devel git cmake ninja qt6-base vlc libsecret tesseract sudo
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          chown -R builder:builder "${{ github.workspace }}"
+
+      # PKGBUILD's source=() clones github.com/Lynder063/segmenter itself
+      # (it's a VCS/-git package, tracking main directly — see its own header
+      # comment for why) rather than building the checkout above; the
+      # checkout here only exists to get the PKGBUILD file itself onto disk.
+      - name: makepkg
+        run: su builder -c "cd '${{ github.workspace }}/linux/native' && makepkg -s --noconfirm --nocheck"
+
+  # AppImage stays on a plain runner (not a container) deliberately: an
+  # earlier local test on a newer host toolchain hit linuxdeploy's bundled
+  # `strip` choking on a `.relr.dyn` relocation section it doesn't recognise
+  # — a too-new-host problem, not a too-old one — so the oldest supported
+  # runner avoids that class of failure by construction, the same reasoning
+  # the comment used to give for why this whole job wasn't a container.
+  linux-build:
+    name: Linux (build, for AppImage)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write .env
+        run: echo "DISCORD_CLIENT_ID=${{ secrets.DISCORD_CLIENT_ID }}" > .env
+
       # Ubuntu 22.04's own qt6-base-dev is 6.2.4, below the 6.5 floor
       # core/CMakeLists.txt requires, and (checked against a real run) the
       # kubuntu-ppa/backports PPA does not actually carry a newer qt6-base-dev
       # for jammy — it backports KDE Plasma/Frameworks, not raw Qt6 base, so
       # apt silently keeps resolving to the stock 6.2.4 package even with the
       # PPA enabled. install-qt-action sidesteps distro packaging entirely,
-      # same as the Windows job already does.
+      # same as the Windows job already does. (linux-deb/linux-rpm sidestep
+      # this differently — a real container per distro — but this job stays
+      # on the plain runner for AppImage's sake, so it still needs this.)
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
@@ -78,7 +241,7 @@ jobs:
 
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: linux-release
+          key: linux-appimage-build
 
       - name: Build
         env:
@@ -89,15 +252,12 @@ jobs:
           chmod +x linux/native/build.sh
           ./linux/native/build.sh
 
-      # A binary that builds but will not start is worse than a failed build,
-      # and both failure modes here are silent — a missing platform plugin
-      # only surfaces at runtime.
       - name: Smoke-test the binary
         run: QT_QPA_PLATFORM=offscreen linux/native/build/Release/bin/Segmenter --scan /nonexistent | tail -1
 
       # Staged once here via the install() rules in CMakeLists.txt, so
-      # linux-deb/linux-rpm/linux-appimage need neither cmake nor the Qt/
-      # libvlc build environment above — just their own packaging tool.
+      # linux-appimage needs neither cmake nor the Qt/libvlc build
+      # environment above — just its own packaging tool.
       - name: Stage install tree
         run: |
           DESTDIR="${{ github.workspace }}/stage" \
@@ -107,82 +267,6 @@ jobs:
         with:
           name: linux-staged
           path: stage/
-          if-no-files-found: error
-
-  linux-deb:
-    name: Linux (.deb)
-    needs: linux-build
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: linux-staged
-          path: stage
-
-      - name: Install packaging tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends dpkg-dev fakeroot
-
-      - name: Package
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          [ "${VERSION}" = "${GITHUB_REF_NAME}" ] && VERSION="1.0.0"
-          chmod +x linux/native/package.sh
-          ./linux/native/package.sh --only deb --version "${VERSION}" \
-            --staged-dir "${{ github.workspace }}/stage"
-
-      - name: Smoke-test the package
-        run: dpkg-deb -c linux/native/dist/*.deb | grep -q '/usr/bin/Segmenter'
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux-deb
-          # PKGBUILD rides along here (package.sh always copies it into dist/
-          # regardless of --only — see its own comment) since some job has to
-          # upload it and this one is as good as any; it's a recipe rather
-          # than a built package, but the one Arch users actually want.
-          path: |
-            linux/native/dist/*.deb
-            linux/native/dist/PKGBUILD
-          if-no-files-found: error
-
-  linux-rpm:
-    name: Linux (.rpm)
-    needs: linux-build
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: linux-staged
-          path: stage
-
-      - name: Install packaging tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends rpm
-
-      - name: Package
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          [ "${VERSION}" = "${GITHUB_REF_NAME}" ] && VERSION="1.0.0"
-          chmod +x linux/native/package.sh
-          ./linux/native/package.sh --only rpm --version "${VERSION}" \
-            --staged-dir "${{ github.workspace }}/stage"
-
-      # Ubuntu can't install an .rpm to actually run it — just check rpmbuild
-      # produced one with the files it should have.
-      - name: Smoke-test the package
-        run: rpm -qlp linux/native/dist/*.rpm | grep -q '/usr/bin/Segmenter'
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux-rpm
-          path: linux/native/dist/*.rpm
           if-no-files-found: error
 
   linux-appimage:
