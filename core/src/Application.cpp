@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QIcon>
 #include <QMutex>
 #include <QMutexLocker>
@@ -109,6 +110,16 @@ int runApplication(int argc, char *argv[])
     app.setDesktopFileName(flatpakId.isEmpty() ? QStringLiteral("segmenter")
                                                 : QString::fromUtf8(flatpakId));
     app.setWindowIcon(QIcon(QStringLiteral(":/resources/app_icon.png")));
+
+    // Bundled rather than left to font-family fallback: without this,
+    // Theme.cpp's stylesheet font list only ever resolves to whatever each
+    // platform substitutes for its first (usually absent) preference — e.g.
+    // Fedora/GNOME turns "Segoe UI" into Adwaita Sans via fontconfig, while
+    // Windows genuinely has Segoe UI installed, so the three platforms never
+    // actually looked the same. Registering Inter here — SIL Open Font
+    // License, resources/fonts/Inter-LICENSE.txt — makes it actually present
+    // everywhere, so Theme.cpp can put it first and mean it.
+    QFontDatabase::addApplicationFont(QStringLiteral(":/resources/fonts/InterVariable.ttf"));
 
     LoggerService::instance().info(
         QStringLiteral("Segmenter %1 starting").arg(app.applicationVersion()));

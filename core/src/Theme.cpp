@@ -17,7 +17,13 @@ QMainWindow {
 
 QWidget {
     color: #e1e1e6;
-    font-family: "Segoe UI", "SF Pro Display", "Outfit", "Inter", sans-serif;
+    /* Inter first and bundled (Application.cpp registers InterVariable.ttf)
+       so all three platforms render the same typeface instead of whatever
+       each one's fontconfig/font-substitution happens to swap "Segoe UI" or
+       "SF Pro Display" for when the real thing isn't installed. Those stay
+       as fallbacks only for the unlikely case font registration itself
+       failed. */
+    font-family: "Inter", "Segoe UI", "SF Pro Display", "Outfit", sans-serif;
     font-size: 13px;
 }
 

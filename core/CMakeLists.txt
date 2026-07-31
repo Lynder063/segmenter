@@ -61,6 +61,7 @@ qt_add_resources(segmenter_core "core_resources"
     PREFIX "/"
     FILES
         resources/app_icon.png
+        resources/fonts/InterVariable.ttf
 )
 
 # PUBLIC so the platform targets inherit the include path and can include the
