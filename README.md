@@ -9,7 +9,7 @@
 [![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-Universal_arm64%2Bx86__64-orange.svg)]()
 [![TheIntroDB v3](https://img.shields.io/badge/API-TheIntroDB_v3-purple.svg)]()
 
-**Segmenter** is a high-performance visual timestamp annotation and automatic AI segment detection application for macOS (Universal Binary `arm64` + `x86_64`), Windows, and Linux. It enables users to detect, create, edit, and submit video segment markers — **Intro**, **Recap**, **Credits**, and **Preview** — to [TheIntroDB](https://theintrodb.org) (v3 API) and [IntroDB](https://introdb.app).
+**Segmenter** is a high-performance visual timestamp annotation and automatic AI segment detection application for macOS, Windows, and Linux. It enables users to detect, create, edit, and submit video segment markers — **Intro**, **Recap**, **Credits**, and **Preview** — to [TheIntroDB](https://theintrodb.org) (v3 API) and [IntroDB](https://introdb.app).
 
 ## Why?
 I wanted to build an open-source, cross-platform tool to make creating segments easier for everyone. I hope my project will help populate TheIntroDB database. I'm just doing this for the love of the game.
@@ -23,19 +23,6 @@ Sending love to everyone who uses my software,
 
 ![Segmenter](docs/screenshot.png)
 
----
-
-## Contents
-
-- [Platform Implementation](#-platform-implementation)
-- [Key Native Features](#-key-native-features)
-- [Controls & Keyboard Shortcuts](#️-controls--keyboard-shortcuts)
-- [Download & Build](#-download--build)
-- [Troubleshooting](#-troubleshooting)
-- [License](#-license)
-
----
-
 ## 🧩 Platform Implementation
 
 Windows and Linux run the *same* application: one shared Qt 6 core, plus a thin
@@ -43,24 +30,6 @@ platform layer, with only three files differing between them. macOS is a
 separate Swift port against Apple's own frameworks. All three share the same
 algorithm and the same visual design; `docs/screenshot.png` is the contract
 for what the window looks like.
-
-| | macOS | Windows | Linux |
-|---|---|---|---|
-| UI | SwiftUI | \<-------- shared Qt 6 Widgets --------\> | |
-| Playback | LibVLC + VideoToolbox | LibVLC + DirectX | LibVLC |
-| FFT | Accelerate vDSP | \<-------- radix-2 (`core/src/services/Fft.cpp`) --------\> | |
-| Text detection | Vision | `Windows.Media.Ocr` | Tesseract *(optional)* |
-| Music vs. speech | SoundAnalysis (ANE) | \<-------- spectral flatness --------\> | |
-| Key storage | Keychain | Credential Manager | Secret Service keyring |
-| GPU naming | Metal | DXGI | `/sys/class/drm` |
-| Discord Rich Presence | \<---------------- opt-in via `.env`, see below ----------------\> | | |
-
-On Linux both platform backends are optional. Without `libsecret` the API keys
-fall back to a permission-restricted file — the app says so in the UI rather
-than implying they are encrypted. Without Tesseract the RCD engine runs
-audio-only and cannot tell closing credits from a next-episode preview.
-
----
 
 ## ✨ Key Native Features
 
