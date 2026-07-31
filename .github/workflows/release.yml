@@ -668,21 +668,21 @@ jobs:
     # publishing, so the workflow can be exercised without cutting a release.
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
-      # Excludes linux-staged: it's linux-build's raw install tree, consumed
-      # by linux-appimage as an intermediate input, not a release deliverable
-      # — without this exclusion its bare Segmenter binary/desktop
-      # file/icon land on the release page next to the real packages.
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: |
-            *
-            !linux-staged
 
+      # linux-staged (linux-build's raw install tree, consumed by
+      # linux-appimage as an intermediate input, not a release deliverable)
+      # is excluded here rather than via download-artifact's own `pattern`
+      # input — a multiline `*` / `!linux-staged` pattern there is parsed as
+      # one literal string, not a positive+negative pair, and silently
+      # downloads nothing at all (confirmed against a real failed run:
+      # "Total of 0 artifact(s) downloaded").
       - name: Flatten artifact directories
         run: |
           mkdir -p release
-          find dist -type f -exec cp {} release/ \;
+          find dist -mindepth 2 -type f -not -path 'dist/linux-staged/*' -exec cp {} release/ \;
           ls -lh release
 
       - uses: softprops/action-gh-release@v2
