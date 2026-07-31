@@ -35,7 +35,7 @@ jobs:
   # distro's packaging step. Each container's own apt/dnf has a current,
   # correctly-matched Qt/libvlc — verified directly (podman run) before
   # committing to this: debian:13 apt-get installs qt6-base-dev 6.8.2 and
-  # libvlc-dev 3.0.23 with nothing extra enabled; fedora:41 dnf installs
+  # libvlc-dev 3.0.23 with nothing extra enabled; fedora:44 dnf installs
   # qt6-qtbase-devel, vlc-devel and rpm-build with no RPM Fusion needed. This
   # replaces the previous install-qt-action/kubuntu-PPA workarounds entirely
   # for these two jobs.
@@ -108,16 +108,22 @@ jobs:
           if-no-files-found: error
 
   linux-rpm:
-    name: Linux (.rpm, Fedora 41)
+    name: Linux (.rpm, Fedora 44)
     runs-on: ubuntu-latest
     container:
-      image: fedora:41
+      image: fedora:44
     steps:
       - uses: actions/checkout@v4
 
       - name: Write .env
         run: echo "DISCORD_CLIENT_ID=${{ secrets.DISCORD_CLIENT_ID }}" > .env
 
+      # ccache is installed here (not left to ccache-action) because
+      # ccache-action's own dnf fallback unconditionally runs
+      # `dnf install -y epel-release` first — a no-op repo that doesn't
+      # exist on plain Fedora (only RHEL/CentOS), so it fails outright.
+      # Fedora ships ccache directly; pre-installing it makes the action
+      # detect it's already present and skip its own install attempt.
       - name: Install build & packaging dependencies
         run: |
           dnf install -y \
@@ -126,11 +132,11 @@ jobs:
             vlc-devel \
             libsecret-devel \
             tesseract-devel tesseract-langpack-eng \
-            rpm-build
+            rpm-build ccache
 
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: linux-rpm-fedora41
+          key: linux-rpm-fedora44
 
       - name: Build
         env:
@@ -181,19 +187,24 @@ jobs:
       # makepkg refuses to run as root — base-devel + a created non-root
       # user with passwordless sudo is the standard pattern for running it
       # inside a CI container.
+      # $GITHUB_WORKSPACE (not the ${{ github.workspace }} expression) — inside
+      # a container job the runner mounts the workspace at /__w/<repo>/<repo>,
+      # but the github.workspace *expression* is interpolated with the host
+      # path (/home/runner/work/...) before the container ever sees it. The
+      # env var is set correctly for the container in every step's shell.
       - name: Install dependencies and create a non-root builder
         run: |
           pacman -Sy --noconfirm --needed base-devel git cmake ninja qt6-base vlc libsecret tesseract sudo
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          chown -R builder:builder "${{ github.workspace }}"
+          chown -R builder:builder "$GITHUB_WORKSPACE"
 
       # PKGBUILD's source=() clones github.com/Lynder063/segmenter itself
       # (it's a VCS/-git package, tracking main directly — see its own header
       # comment for why) rather than building the checkout above; the
       # checkout here only exists to get the PKGBUILD file itself onto disk.
       - name: makepkg
-        run: su builder -c "cd '${{ github.workspace }}/linux/native' && makepkg -s --noconfirm --nocheck"
+        run: su builder -c "cd '$GITHUB_WORKSPACE/linux/native' && makepkg -s --noconfirm --nocheck"
 
   # AppImage stays on a plain runner (not a container) deliberately: an
   # earlier local test on a newer host toolchain hit linuxdeploy's bundled
@@ -219,6 +230,12 @@ jobs:
       # same as the Windows job already does. (linux-deb/linux-rpm sidestep
       # this differently — a real container per distro — but this job stays
       # on the plain runner for AppImage's sake, so it still needs this.)
+      # No `modules: qtwayland` — as of Qt 6.8, aqt's linux_gcc_64 desktop
+      # archive already bundles the Wayland QPA plugin in the base install;
+      # "qtwayland" isn't a valid addon module id anymore (confirmed via
+      # `aqt list-qt linux desktop --modules 6.8.3 linux_gcc_64`, which only
+      # lists "qtwaylandcompositor" — the compositor side, not the client
+      # plugin this app actually needs).
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
@@ -226,7 +243,6 @@ jobs:
           host: linux
           target: desktop
           arch: linux_gcc_64
-          modules: qtwayland
           cache: true
 
       - name: Install build dependencies
@@ -286,6 +302,12 @@ jobs:
       # ...), so unlike linux-deb/linux-rpm this job needs the same runtime
       # libraries present as linux-build did, plus Qt's own tools —
       # linuxdeploy-plugin-qt shells out to qmake to find Qt's plugin layout.
+      # No `modules: qtwayland` — as of Qt 6.8, aqt's linux_gcc_64 desktop
+      # archive already bundles the Wayland QPA plugin in the base install;
+      # "qtwayland" isn't a valid addon module id anymore (confirmed via
+      # `aqt list-qt linux desktop --modules 6.8.3 linux_gcc_64`, which only
+      # lists "qtwaylandcompositor" — the compositor side, not the client
+      # plugin this app actually needs).
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
@@ -293,7 +315,6 @@ jobs:
           host: linux
           target: desktop
           arch: linux_gcc_64
-          modules: qtwayland
           cache: true
 
       - name: Install packaging tools
@@ -398,11 +419,15 @@ jobs:
         with:
           arch: x64
 
-      # dir: C:\Qt because that is one of the fixed locations
-      # windows/native/build.ps1 searches (SEGMENTER_QT_ROOT is the escape
-      # hatch for anywhere else) — install-qt-action's own default install
-      # location doesn't match it, which is what "Qt 6 (msvc2022_64) not
-      # found" from build.ps1 actually means.
+      # dir: C:\Qt was meant to land Qt at one of the fixed locations
+      # windows/native/build.ps1 searches, but install-qt-action actually
+      # nests a "Qt" subfolder under whatever `dir` is given — real output
+      # is C:\Qt\Qt\6.8.3\msvc2022_64, not C:\Qt\6.8.3\msvc2022_64 — so
+      # build.ps1's own directory scan still came up empty ("Qt 6
+      # (msvc2022_64) not found"). install-qt-action exports the correct
+      # path as $env:QT_ROOT_DIR regardless of that nesting quirk, so feed
+      # it straight into build.ps1's SEGMENTER_QT_ROOT escape hatch instead
+      # of relying on the scan.
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
@@ -438,6 +463,8 @@ jobs:
 
       - name: Build
         shell: pwsh
+        env:
+          SEGMENTER_QT_ROOT: ${{ env.QT_ROOT_DIR }}
         run: ./windows/native/build.ps1 -Configuration Release
 
       - name: Package

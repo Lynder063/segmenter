@@ -584,12 +584,13 @@ public struct MainWindowView: View {
 
         statusMessage = "Submitting \(itemPayloads.count) segment(s) to TheIntroDB v3 API..."
         let client = TheIntroDBClient()
+        let payloadsToSubmit = itemPayloads
 
         Task {
             var successCount = 0
             var errors: [String] = []
 
-            for payload in itemPayloads {
+            for payload in payloadsToSubmit {
                 let segName = (payload["segment"] as? String)?.capitalized ?? "Segment"
                 do {
                     let (_, _) = try await client.submit(requestBody: payload, apiKey: keyToUse)
@@ -599,13 +600,15 @@ public struct MainWindowView: View {
                 }
             }
 
+            let finalSuccessCount = successCount
+            let finalErrors = errors
             await MainActor.run {
-                if errors.isEmpty {
-                    self.statusMessage = "🎉 Successfully submitted \(successCount) segment(s) to TheIntroDB!"
-                } else if successCount > 0 {
-                    self.statusMessage = "Submitted \(successCount) segment(s). Errors: \(errors.joined(separator: "; "))"
+                if finalErrors.isEmpty {
+                    self.statusMessage = "🎉 Successfully submitted \(finalSuccessCount) segment(s) to TheIntroDB!"
+                } else if finalSuccessCount > 0 {
+                    self.statusMessage = "Submitted \(finalSuccessCount) segment(s). Errors: \(finalErrors.joined(separator: "; "))"
                 } else {
-                    self.statusMessage = "Submission Failed: \(errors.joined(separator: "; "))"
+                    self.statusMessage = "Submission Failed: \(finalErrors.joined(separator: "; "))"
                 }
             }
         }

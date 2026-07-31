@@ -25,9 +25,10 @@ public final class AudioExtractorService {
         LoggerService.shared.info("[AudioExtractor] Starting IntroStamp audio engine for: \(videoURL.lastPathComponent) (\(effectiveDurationMs)ms)")
         let bucketCount = max(200, min(2400, effectiveDurationMs / 250))
         progressHandler(10)
+        let durationMsForTask = effectiveDurationMs
 
         return await Task.detached(priority: .userInitiated) {
-            let durationSec = max(Double(effectiveDurationMs) / 1000.0, 1.0)
+            let durationSec = max(Double(durationMsForTask) / 1000.0, 1.0)
 
             // 1. Extract Waveform Buckets using Zero-Copy vDSP_maxmgv
             var waveformBuckets = [Float](repeating: 0.0, count: bucketCount)
