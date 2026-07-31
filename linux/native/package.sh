@@ -204,6 +204,11 @@ fi # rpm
 if [[ -z "${ONLY}" || "${ONLY}" == "appimage" ]]; then
 # --- AppImage ----------------------------------------------------------------
 echo "Building AppImage..."
+# BUILD_DIR only exists as a side effect of this script's own cmake build
+# (the --build-dir/default path); --staged-dir mode skips that entirely and
+# hands in an already-staged tree from elsewhere, so BUILD_DIR itself may
+# not exist yet here.
+mkdir -p "${BUILD_DIR}"
 APPDIR="${BUILD_DIR}/Segmenter.AppDir"
 rm -rf "${APPDIR}"
 cp -a "${STAGE_DIR}" "${APPDIR}"
