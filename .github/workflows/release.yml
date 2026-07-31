@@ -297,6 +297,13 @@ jobs:
           name: linux-staged
           path: stage
 
+      # upload-artifact/download-artifact round-trip through a zip that
+      # doesn't preserve the executable bit, so the binary that came out of
+      # cmake --install as mode 755 lands here as a plain non-executable
+      # file — package.sh's own `-x` check on it fails otherwise.
+      - name: Restore executable bit
+        run: chmod +x stage/usr/bin/Segmenter
+
       # linuxdeploy resolves and bundles the staged binary's actual shared
       # library dependencies (libvlc, libsecret, libtesseract, Qt itself,
       # ...), so unlike linux-deb/linux-rpm this job needs the same runtime
