@@ -230,7 +230,14 @@ if fetch_tool linuxdeploy "${BASE}/linuxdeploy-x86_64.AppImage" \
     # "Available platform plugins are: xcb". Wayland is added when the host has
     # it, so a Wayland session runs natively instead of through XWayland.
     EXTRA_PLUGINS="libqoffscreen.so;libqminimal.so"
-    QT_PLUGIN_DIR="$(find /usr/lib -maxdepth 4 -type d -name platforms -path '*qt6*' 2>/dev/null | head -1)"
+    # || true: under `set -o pipefail`, find exiting 1 on a permission-denied
+    # subdirectory it couldn't descend into (common under /usr/lib) would
+    # otherwise abort the whole script even though 2>/dev/null already
+    # silenced the warning that caused it — the exit code survives the
+    # redirect even when the message doesn't. /usr/lib64 covers Fedora/RHEL-
+    # family hosts, which install-qt-action's Qt6 wouldn't need but a local
+    # `--install-deps` system build does.
+    QT_PLUGIN_DIR="$(find /usr/lib /usr/lib64 -maxdepth 5 -type d -name platforms -path '*qt6*' 2>/dev/null | head -1 || true)"
     if [[ -n "${QT_PLUGIN_DIR}" && -f "${QT_PLUGIN_DIR}/libqwayland-generic.so" ]]; then
         EXTRA_PLUGINS="${EXTRA_PLUGINS};libqwayland-generic.so"
     fi
