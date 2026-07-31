@@ -27,7 +27,7 @@ Sending love to everyone who uses my software,
 
 ## Contents
 
-- [Repository Layout](#-repository-layout)
+- [Platform Implementation](#-platform-implementation)
 - [Key Native Features](#-key-native-features)
 - [Controls & Keyboard Shortcuts](#️-controls--keyboard-shortcuts)
 - [Download & Build](#-download--build)
@@ -36,31 +36,13 @@ Sending love to everyone who uses my software,
 
 ---
 
-## 📁 Repository Layout
+## 🧩 Platform Implementation
 
 Windows and Linux run the *same* application: one shared Qt 6 core, plus a thin
-platform layer. Only three files differ between them.
-
-```
-core/                 Shared Qt 6 / C++ — models, services, RCD engine, entire UI
-  src/platform/       Three interfaces each platform implements:
-                      CredentialStore · OcrService · GpuDetector
-windows/
-  native/src/         Windows platform layer + main.cpp            ← current
-  dotnet/             C# WPF + LibVLCSharp                          (superseded)
-linux/
-  native/src/         Linux platform layer + main.cpp              ← current
-  native/flatpak/     Flatpak manifest (dev.lynder.Segmenter)
-  *.py                PySide6 app                                   (superseded)
-mac/
-  native/             Swift + SwiftUI · LibVLC · Accelerate · Vision ← current
-  python/             PySide6 app, PyInstaller .app/.dmg packaging   (superseded)
-docs/                 screenshot.png — the reference layout every port matches
-```
-
-The macOS port is separate because it is written in Swift against Apple's own
-frameworks. All three share the same algorithm and the same visual design;
-`docs/screenshot.png` is the contract for what the window looks like.
+platform layer, with only three files differing between them. macOS is a
+separate Swift port against Apple's own frameworks. All three share the same
+algorithm and the same visual design; `docs/screenshot.png` is the contract
+for what the window looks like.
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
