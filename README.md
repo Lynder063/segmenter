@@ -1,9 +1,11 @@
 # 🎬 Segmenter
 
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Release](https://github.com/Lynder063/segmenter/actions/workflows/release.yml/badge.svg)](https://github.com/Lynder063/segmenter/actions/workflows/release.yml)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-blue.svg)]()
 [![macOS Native](https://img.shields.io/badge/macOS_Native-SwiftUI%20%7C%20LibVLC%20%7C%20Accelerate-silver.svg)]()
 [![Windows Native](https://img.shields.io/badge/Windows_Native-Qt_6%20%7C%20C%2B%2B%20%7C%20LibVLC-0078D4.svg)]()
+[![Linux Native](https://img.shields.io/badge/Linux_Native-Qt_6%20%7C%20C%2B%2B%20%7C%20LibVLC-FCC624.svg)]()
 [![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-Universal_arm64%2Bx86__64-orange.svg)]()
 [![TheIntroDB v3](https://img.shields.io/badge/API-TheIntroDB_v3-purple.svg)]()
 
@@ -23,6 +25,17 @@ Sending love to everyone who uses my software,
 
 ---
 
+## Contents
+
+- [Repository Layout](#-repository-layout)
+- [Key Native Features](#-key-native-features)
+- [Controls & Keyboard Shortcuts](#️-controls--keyboard-shortcuts)
+- [Download & Build](#-download--build)
+- [Troubleshooting](#-troubleshooting)
+- [License](#-license)
+
+---
+
 ## 📁 Repository Layout
 
 Windows and Linux run the *same* application: one shared Qt 6 core, plus a thin
@@ -37,6 +50,7 @@ windows/
   dotnet/             C# WPF + LibVLCSharp                          (superseded)
 linux/
   native/src/         Linux platform layer + main.cpp              ← current
+  native/flatpak/     Flatpak manifest (dev.lynder.Segmenter)
   *.py                PySide6 app                                   (superseded)
 mac/
   native/             Swift + SwiftUI · LibVLC · Accelerate · Vision ← current
@@ -57,6 +71,7 @@ frameworks. All three share the same algorithm and the same visual design;
 | Music vs. speech | SoundAnalysis (ANE) | \<-------- spectral flatness --------\> | |
 | Key storage | Keychain | Credential Manager | Secret Service keyring |
 | GPU naming | Metal | DXGI | `/sys/class/drm` |
+| Discord Rich Presence | — | \<-------- shared core, opt-in via `.env` --------\> | |
 
 On Linux both platform backends are optional. Without `libsecret` the API keys
 fall back to a permission-restricted file — the app says so in the UI rather
@@ -76,7 +91,7 @@ audio-only and cannot tell closing credits from a next-episode preview.
 ### 🔍 Interactive Zoomable Multi-Track Timeline ($1.0\times - 50.0\times$)
 - **Pinch-to-Zoom & Trackpad Gestures**: smooth magnify and scroll-wheel panning across the multi-track timeline. `Ctrl`+wheel zooms, wheel pans.
 - **Dynamic Time Ruler Ticks**: automatically adjusts timecode grid ticks from 5-minute intervals down to 1-second and 250 ms sub-frame intervals.
-- **Zoom Controls Toolbar**: quick zoom slider, `+`/`-` buttons, `1x` reset, and `🎯 Scope` center-on-playhead action.
+- **Zoom Controls Toolbar**: quick zoom slider, `+`/`-` buttons, `1x` reset, and a `⌖ Scope` center-on-playhead action.
 - **Direct Editing**: drag a segment whole, or by either edge, with undo/redo coalescing the whole drag into one step.
 
 ### 🤖 RCD Season Fingerprinting
@@ -103,14 +118,15 @@ Supporting behaviour:
 - Full submission compatibility with **TheIntroDB v3 API** including `video_duration_ms`, `start_ms`, `end_ms`, `tmdb_id`, and `imdb_id`.
 - Support for TMDB v3 API Keys and v4 Read Access Bearer Tokens with automatic metadata resolution.
 
-### 🎮 Discord Rich Presence
+### 🎮 Discord Rich Presence *(Windows & Linux)*
 Shows what you're editing — idle, loaded, playing, paused or scanning — as
 your Discord status. Optional and off by default: copy `.env.example` to
 `.env` at the repo root and set `DISCORD_CLIENT_ID` to a Discord application
-you control (`https://discord.com/developers/applications`, with a Rich
-Presence art asset uploaded under the key `segmenter_logo`) before running
-CMake. No `.env`, no client ID compiled in, no connection attempted — nothing
-else about the app depends on it.
+you control ([discord.com/developers/applications](https://discord.com/developers/applications),
+with a Rich Presence art asset uploaded under the key `segmenter_logo`) before
+running CMake. No `.env`, no client ID compiled in, no connection attempted —
+nothing else about the app depends on it. Lives in the shared `core/`, so it
+is not currently available on the Swift-based macOS build.
 
 ---
 
@@ -131,7 +147,24 @@ else about the app depends on it.
 
 ---
 
-## 🚀 Native Build & Launch
+## 📦 Download & Build
+
+Every push of a version tag builds and publishes installers for all three
+platforms via [GitHub Actions](.github/workflows/release.yml) — grab the
+latest from the [Releases page](https://github.com/Lynder063/segmenter/releases)
+if you'd rather not build from source:
+
+| Platform | File | Notes |
+|---|---|---|
+| Debian / Ubuntu / Mint | `segmenter_*_amd64.deb` | `sudo apt install ./segmenter_*.deb` |
+| Fedora / RHEL / openSUSE | `segmenter-*.x86_64.rpm` | `sudo dnf install ./segmenter-*.rpm` |
+| Arch / Manjaro | `PKGBUILD` | `makepkg -si` |
+| Any Linux, sandboxed | `Segmenter-*-x86_64.flatpak` | `flatpak install ./Segmenter-*.flatpak` |
+| Any Linux, no install | `Segmenter-*-x86_64.AppImage` | `chmod +x` and run |
+| Windows 10/11 x64 | `Segmenter-windows-x64.zip` | unzip and run `Segmenter.exe` |
+| macOS 12+ (Apple Silicon + Intel) | `Segmenter-macos-universal.zip` | unzip and run; unsigned, so right-click → Open the first time |
+
+Building from source instead:
 
 ### macOS (Universal Binary `arm64` + `x86_64`)
 
@@ -209,6 +242,15 @@ built package. A sandboxed Flatpak build is also available:
 `libsecret` and Tesseract are optional — the build reports which it found and
 what it falls back to without them.
 
+### Optional: Discord Rich Presence
+
+Off by default on every checkout but the maintainer's own. To enable it locally:
+
+```bash
+cp .env.example .env
+# then set DISCORD_CLIENT_ID= in .env before running cmake
+```
+
 ---
 
 ## 🧰 Troubleshooting
@@ -220,6 +262,8 @@ what it falls back to without them.
 **Detection found the preview instead of the credits.** The visual pass needs an OCR recognizer. If the log says `OCR unavailable`, install a Windows language pack — without it the engine falls back to audio only, which cannot tell the two apart.
 
 **Re-scanning is as slow as the first scan.** The feature cache keys on file size and modification time, so a re-encode or a touched timestamp invalidates it — correctly.
+
+**Linux: two titlebars, or the video area is blank under GNOME/Wayland.** Both are handled already — the video surface renders via LibVLC's raw callbacks rather than window embedding (works identically on X11 and Wayland), and `main.cpp` requests Qt's `adwaita` Wayland decoration plugin so Mutter doesn't double-draw a titlebar. If you still see either on a very old build, update.
 
 ---
 
