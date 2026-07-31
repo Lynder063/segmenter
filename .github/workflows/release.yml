@@ -15,6 +15,13 @@ on:
 permissions:
   contents: write
 
+# Only tag pushes and manual dispatch trigger this (not every push/PR), so the
+# main case this actually guards against is re-running workflow_dispatch
+# repeatedly while iterating — cheap to have either way.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   QT_VERSION: 6.8.3
   LIBVLC_VERSION: 3.0.21
@@ -65,7 +72,15 @@ jobs:
             libegl1 libxkbcommon-x11-0 libxcb-cursor0 libgl1 \
             file curl ffmpeg
 
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-release
+
       - name: Build
+        env:
+          SEGMENTER_CMAKE_EXTRA_ARGS: >-
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
         run: |
           chmod +x linux/native/build.sh linux/native/package.sh
           ./linux/native/build.sh
@@ -134,6 +149,18 @@ jobs:
           sudo apt-get install -y --no-install-recommends flatpak flatpak-builder elfutils
           sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install --noninteractive flathub org.kde.Platform//6.11 org.kde.Sdk//6.11
+
+      # flatpak-builder skips rebuilding a module whose cached build state is
+      # still valid — this is what turns the ffmpeg/libvlc compile (the
+      # slowest thing in this whole workflow) into a no-op on a cache hit.
+      # Keyed on dev.lynder.Segmenter.yml specifically (not
+      # segmenter-module*.yml) because that's the file that actually defines
+      # the ffmpeg/libvlc/libsecret modules; editing the segmenter module
+      # itself shouldn't invalidate their cached builds.
+      - uses: actions/cache@v4
+        with:
+          path: linux/native/flatpak/.flatpak-builder
+          key: flatpak-builder-${{ hashFiles('linux/native/flatpak/dev.lynder.Segmenter.yml') }}
 
       - name: Build
         run: |

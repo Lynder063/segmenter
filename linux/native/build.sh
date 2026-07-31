@@ -75,9 +75,14 @@ echo "Build type:     ${BUILD_TYPE}"
 echo "Install prefix: ${PREFIX}"
 
 # --- Configure & build -------------------------------------------------------
+# SEGMENTER_CMAKE_EXTRA_ARGS is intentionally word-split (e.g. CI sets it to
+# "-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache");
+# unset or empty for a normal local build.
+# shellcheck disable=SC2086
 cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" -G "${GENERATOR}" \
     -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-    -DCMAKE_INSTALL_PREFIX="${PREFIX}"
+    -DCMAKE_INSTALL_PREFIX="${PREFIX}" \
+    ${SEGMENTER_CMAKE_EXTRA_ARGS:-}
 
 cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
 

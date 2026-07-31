@@ -13,36 +13,72 @@ set -euo pipefail
 #
 # Expects ./build.sh to have run first.
 #
-# Usage: ./package.sh [--build-dir DIR] [--version X.Y.Z]
+# Usage: ./package.sh [--build-dir DIR] [--version X.Y.Z] [--only deb|rpm|appimage]
+#                      [--staged-dir DIR]
+#
+# --only builds just one format (plus the always-cheap PKGBUILD copy at the
+# end) — CI uses this to run .deb/.rpm/AppImage as separate parallel jobs
+# against one shared build, rather than one job doing all three in sequence.
+# Omit it (the default) to build everything, which is what a local developer
+# running this directly still wants.
+#
+# --staged-dir points at an already-staged /usr tree (i.e. what this script
+# would otherwise produce itself via `cmake --install`) instead of BUILD_DIR's
+# own binary — CI's per-format jobs stage once in a separate build job and
+# pass the result down, so a .deb-only or .rpm-only job needs neither cmake
+# nor the full Qt/libvlc build environment, just dpkg-deb/rpmbuild themselves.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${SCRIPT_DIR}/build/Release"
 VERSION="1.0.0"
+ONLY=""
+STAGED_DIR_ARG=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --build-dir) BUILD_DIR="$2"; shift 2 ;;
-        --version)   VERSION="$2"; shift 2 ;;
+        --build-dir)  BUILD_DIR="$2"; shift 2 ;;
+        --version)    VERSION="$2"; shift 2 ;;
+        --only)       ONLY="$2"; shift 2 ;;
+        --staged-dir) STAGED_DIR_ARG="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
 done
 
-DIST_DIR="${SCRIPT_DIR}/dist"
-STAGE_DIR="${BUILD_DIR}/stage"
+case "${ONLY}" in
+    ""|deb|rpm|appimage) ;;
+    *) echo "Unknown --only value: ${ONLY} (want deb, rpm or appimage)" >&2; exit 2 ;;
+esac
 
-if [[ ! -x "${BUILD_DIR}/bin/Segmenter" ]]; then
-    echo "No binary at ${BUILD_DIR}/bin/Segmenter — run ./build.sh first." >&2
-    exit 1
+DIST_DIR="${SCRIPT_DIR}/dist"
+
+if [[ -n "${STAGED_DIR_ARG}" ]]; then
+    STAGE_DIR="${STAGED_DIR_ARG}"
+    if [[ ! -x "${STAGE_DIR}/usr/bin/Segmenter" ]]; then
+        echo "No binary at ${STAGE_DIR}/usr/bin/Segmenter" >&2
+        exit 1
+    fi
+
+    echo "=== Packaging Segmenter ${VERSION} (pre-staged) ==="
+    rm -rf "${DIST_DIR}"
+    mkdir -p "${DIST_DIR}"
+else
+    STAGE_DIR="${BUILD_DIR}/stage"
+
+    if [[ ! -x "${BUILD_DIR}/bin/Segmenter" ]]; then
+        echo "No binary at ${BUILD_DIR}/bin/Segmenter — run ./build.sh first." >&2
+        exit 1
+    fi
+
+    echo "=== Packaging Segmenter ${VERSION} ==="
+    rm -rf "${DIST_DIR}" "${STAGE_DIR}"
+    mkdir -p "${DIST_DIR}"
+
+    # Lay out a normal /usr tree via the install rules in CMakeLists.
+    DESTDIR="${STAGE_DIR}" cmake --install "${BUILD_DIR}" --prefix /usr >/dev/null
+    echo "Staged to ${STAGE_DIR}"
 fi
 
-echo "=== Packaging Segmenter ${VERSION} ==="
-rm -rf "${DIST_DIR}" "${STAGE_DIR}"
-mkdir -p "${DIST_DIR}"
-
-# Lay out a normal /usr tree via the install rules in CMakeLists.
-DESTDIR="${STAGE_DIR}" cmake --install "${BUILD_DIR}" --prefix /usr >/dev/null
-echo "Staged to ${STAGE_DIR}"
-
+if [[ -z "${ONLY}" || "${ONLY}" == "deb" ]]; then
 # --- .deb --------------------------------------------------------------------
 echo "Building .deb..."
 DEB_ROOT="${BUILD_DIR}/deb"
@@ -77,7 +113,9 @@ CONTROL
 dpkg-deb --build --root-owner-group "${DEB_ROOT}" \
     "${DIST_DIR}/segmenter_${VERSION}_amd64.deb" >/dev/null
 echo "  -> ${DIST_DIR}/segmenter_${VERSION}_amd64.deb"
+fi # deb
 
+if [[ -z "${ONLY}" || "${ONLY}" == "rpm" ]]; then
 # --- .rpm ----------------------------------------------------------------------
 if command -v rpmbuild >/dev/null; then
     echo "Building .rpm..."
@@ -149,7 +187,9 @@ SPEC
 else
     echo "rpmbuild not found — skipping .rpm. Install the rpm-build package to enable it." >&2
 fi
+fi # rpm
 
+if [[ -z "${ONLY}" || "${ONLY}" == "appimage" ]]; then
 # --- AppImage ----------------------------------------------------------------
 echo "Building AppImage..."
 APPDIR="${BUILD_DIR}/Segmenter.AppDir"
@@ -210,8 +250,12 @@ if fetch_tool linuxdeploy "${BASE}/linuxdeploy-x86_64.AppImage" \
 else
     echo "  could not fetch linuxdeploy — skipping AppImage." >&2
 fi
+fi # appimage
 
 # --- PKGBUILD --------------------------------------------------------------
+# Cheap enough (one file copy) to just always do, regardless of --only — every
+# per-format CI job ends up shipping an identical copy in its own artifact,
+# which the release job's flatten step happily de-duplicates by overwriting.
 # A recipe, not a built package — makepkg needs Arch to run — but copying it
 # alongside the real packages means a local ./package.sh run produces the same
 # complete dist/ that CI's release.yml assembles from these two sources.
