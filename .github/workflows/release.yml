@@ -660,9 +660,16 @@ jobs:
     # publishing, so the workflow can be exercised without cutting a release.
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
+      # Excludes linux-staged: it's linux-build's raw install tree, consumed
+      # by linux-appimage as an intermediate input, not a release deliverable
+      # — without this exclusion its bare Segmenter binary/desktop
+      # file/icon land on the release page next to the real packages.
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: |
+            *
+            !linux-staged
 
       - name: Flatten artifact directories
         run: |
