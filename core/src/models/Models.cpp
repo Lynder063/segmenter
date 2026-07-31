@@ -142,11 +142,15 @@ QString rcdMethodDisplayName(RcdDetectionMethod method)
 {
     switch (method) {
     case RcdDetectionMethod::HardwareAccelerated:
-        return QStringLiteral("HW Accelerated (SIMD FFT + Windows OCR)");
+        // Not platform-specific text on purpose — this label is shared by
+        // Windows (Windows.Media.Ocr) and Linux (Tesseract) alike.
+        return QStringLiteral("HW Accelerated (SIMD FFT + OCR)");
     case RcdDetectionMethod::ChromaprintFft:
         return QStringLiteral("Chromaprint 12-Bin Pitch Chromagram (AcoustID)");
     case RcdDetectionMethod::MultimodalFusion:
-        return QStringLiteral("Multimodal Fusion (Audio Chroma + Vision OCR)");
+        // Same platform-neutral wording as HardwareAccelerated above — "Vision"
+        // here would misleadingly suggest Apple's framework specifically.
+        return QStringLiteral("Multimodal Fusion (Audio Chroma + OCR)");
     case RcdDetectionMethod::SingleEpisode:
         return QStringLiteral("Single Episode (Standalone — No Season Folder)");
     }
