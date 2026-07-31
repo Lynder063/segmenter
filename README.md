@@ -53,7 +53,7 @@ for what the window looks like.
 | Music vs. speech | SoundAnalysis (ANE) | \<-------- spectral flatness --------\> | |
 | Key storage | Keychain | Credential Manager | Secret Service keyring |
 | GPU naming | Metal | DXGI | `/sys/class/drm` |
-| Discord Rich Presence | — | \<-------- shared core, opt-in via `.env` --------\> | |
+| Discord Rich Presence | \<---------------- opt-in via `.env`, see below ----------------\> | | |
 
 On Linux both platform backends are optional. Without `libsecret` the API keys
 fall back to a permission-restricted file — the app says so in the UI rather
@@ -100,15 +100,20 @@ Supporting behaviour:
 - Full submission compatibility with **TheIntroDB v3 API** including `video_duration_ms`, `start_ms`, `end_ms`, `tmdb_id`, and `imdb_id`.
 - Support for TMDB v3 API Keys and v4 Read Access Bearer Tokens with automatic metadata resolution.
 
-### 🎮 Discord Rich Presence *(Windows & Linux)*
+### 🎮 Discord Rich Presence
 Shows what you're editing — idle, loaded, playing, paused or scanning — as
-your Discord status. Optional and off by default: copy `.env.example` to
-`.env` at the repo root and set `DISCORD_CLIENT_ID` to a Discord application
-you control ([discord.com/developers/applications](https://discord.com/developers/applications),
-with a Rich Presence art asset uploaded under the key `segmenter_logo`) before
-running CMake. No `.env`, no client ID compiled in, no connection attempted —
-nothing else about the app depends on it. Lives in the shared `core/`, so it
-is not currently available on the Swift-based macOS build.
+your Discord status, on all three platforms. Optional and off by default:
+copy `.env.example` to `.env` at the repo root and set `DISCORD_CLIENT_ID` to
+a Discord application you control
+([discord.com/developers/applications](https://discord.com/developers/applications),
+with a Rich Presence art asset uploaded under the key `segmenter_logo`)
+before building. No `.env`, no client ID compiled in, no connection
+attempted — nothing else about the app depends on it. Windows/Linux read
+`.env` at CMake configure time (`core/src/services/DiscordRpcService`);
+macOS's `build.sh` reads it at the start of every build and generates
+`Sources/Segmenter/Generated/DiscordConfig.swift`
+(`DiscordRPCService.swift` is a from-scratch Swift port of the same protocol,
+independent of the Qt/CMake one since macOS builds via SwiftPM instead).
 
 ---
 
@@ -157,6 +162,10 @@ Building from source instead:
 ```bash
 ./mac/native/dist/Segmenter.app/Contents/MacOS/Segmenter
 ```
+
+For Discord Rich Presence, drop a `.env` next to this README (see
+[Optional: Discord Rich Presence](#optional-discord-rich-presence) below)
+before running `build.sh` — it reads it on every run.
 
 ### Windows (Qt 6 / C++)
 
@@ -230,7 +239,8 @@ Off by default on every checkout but the maintainer's own. To enable it locally:
 
 ```bash
 cp .env.example .env
-# then set DISCORD_CLIENT_ID= in .env before running cmake
+# then set DISCORD_CLIENT_ID= in .env before building
+# (Windows/Linux: before running cmake; macOS: before running build.sh)
 ```
 
 ---

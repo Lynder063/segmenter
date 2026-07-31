@@ -171,6 +171,17 @@ public struct MainWindowView: View {
         .onAppear {
             loadKeychainKeys()
             setupKeyboardMonitor()
+            DiscordRPCService.shared.setIdle()
+        }
+        .onChange(of: isPlaying) { playing in
+            guard let url = videoURL else { return }
+            if playing {
+                DiscordRPCService.shared.setPlaying(
+                    videoName: url.lastPathComponent, positionMs: currentPositionMs, durationMs: durationMs)
+            } else {
+                DiscordRPCService.shared.setPaused(
+                    videoName: url.lastPathComponent, positionMs: currentPositionMs, durationMs: durationMs)
+            }
         }
     }
 
@@ -303,6 +314,7 @@ public struct MainWindowView: View {
             self.videoURL = rawUrl
             self.statusMessage = "Loaded \(rawUrl.lastPathComponent)"
             LoggerService.shared.info("[UI] User opened video file with LibVLC engine: \(rawUrl.path)")
+            DiscordRPCService.shared.setVideoLoaded(videoName: rawUrl.lastPathComponent)
 
 
             // Auto-parse filename hints
@@ -319,6 +331,10 @@ public struct MainWindowView: View {
             let initialDur = self.durationMs
 
             Task.detached(priority: .userInitiated) {
+                await MainActor.run {
+                    DiscordRPCService.shared.setAnalyzing(videoName: rawUrl.lastPathComponent)
+                }
+
                 // 1. Inspect metadata via ffprobe/AVFoundation in background thread
                 var currentDurMs = initialDur
                 if let meta = await FFmpegService.shared.inspectMedia(url: rawUrl) {

@@ -94,6 +94,10 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--test-rcd" {
         func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
             return true
         }
+
+        func applicationWillTerminate(_ notification: Notification) {
+            DiscordRPCService.shared.clear()
+        }
     }
 
 
