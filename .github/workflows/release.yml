@@ -107,6 +107,70 @@ jobs:
             linux/native/dist/PKGBUILD
           if-no-files-found: error
 
+  # arm64 twin of linux-deb: same container image (debian:13 is a real
+  # multi-arch manifest — confirmed via `docker manifest inspect debian:13`,
+  # which lists a linux/arm64/v8 entry — so this pulls the native arm64
+  # variant automatically), same steps, just on GitHub's free-for-public-repos
+  # native arm64 runner instead of the amd64 one. No QEMU/cross-compilation:
+  # ubuntu-24.04-arm is real aarch64 hardware. package.sh derives the .deb's
+  # Architecture field and filename from `uname -m` (see its own comment),
+  # so the only thing this job needs to change from linux-deb is runs-on and
+  # the cache key.
+  linux-deb-arm64:
+    name: Linux (.deb, Debian 13, arm64)
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: debian:13
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write .env
+        run: echo "DISCORD_CLIENT_ID=${{ secrets.DISCORD_CLIENT_ID }}" > .env
+
+      - name: Install build & packaging dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ pkg-config \
+            qt6-base-dev qt6-base-dev-tools \
+            libvlc-dev vlc-plugin-base \
+            libsecret-1-dev \
+            libtesseract-dev tesseract-ocr tesseract-ocr-eng \
+            dpkg-dev fakeroot
+
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-deb-debian13-arm64
+
+      - name: Build
+        env:
+          SEGMENTER_CMAKE_EXTRA_ARGS: >-
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        run: |
+          chmod +x linux/native/build.sh
+          ./linux/native/build.sh
+
+      - name: Smoke-test the binary
+        run: QT_QPA_PLATFORM=offscreen linux/native/build/Release/bin/Segmenter --scan /nonexistent | tail -1
+
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "${VERSION}" = "${GITHUB_REF_NAME}" ] && VERSION="1.0.0"
+          chmod +x linux/native/package.sh
+          ./linux/native/package.sh --only deb --version "${VERSION}"
+
+      - name: Smoke-test the package
+        run: dpkg-deb -c linux/native/dist/*.deb | grep -q '/usr/bin/Segmenter'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-deb-arm64
+          path: |
+            linux/native/dist/*.deb
+          if-no-files-found: error
+
   linux-rpm:
     name: Linux (.rpm, Fedora 44)
     runs-on: ubuntu-latest
@@ -163,6 +227,67 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: linux-rpm
+          path: linux/native/dist/*.rpm
+          if-no-files-found: error
+
+  # arm64 twin of linux-rpm — see linux-deb-arm64's comment for the general
+  # reasoning (native ubuntu-24.04-arm runner, no QEMU; fedora:44 is a real
+  # multi-arch manifest, confirmed via `docker manifest inspect fedora:44`
+  # listing a linux/arm64/v8 entry). Also confirmed for real: `dnf install`
+  # of this exact package list resolves cleanly under `--platform linux/arm64`
+  # (QEMU-emulated locally, since no arm64 hardware was available to test on
+  # directly) — Fedora ships aarch64 builds of qt6-qtbase-devel, vlc-devel
+  # and tesseract-devel same as x86_64, nothing arch-specific missing.
+  linux-rpm-arm64:
+    name: Linux (.rpm, Fedora 44, arm64)
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: fedora:44
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write .env
+        run: echo "DISCORD_CLIENT_ID=${{ secrets.DISCORD_CLIENT_ID }}" > .env
+
+      - name: Install build & packaging dependencies
+        run: |
+          dnf install -y \
+            cmake ninja-build gcc-c++ pkgconf-pkg-config \
+            qt6-qtbase-devel \
+            vlc-devel \
+            libsecret-devel \
+            tesseract-devel tesseract-langpack-eng \
+            rpm-build ccache
+
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-rpm-fedora44-arm64
+
+      - name: Build
+        env:
+          SEGMENTER_CMAKE_EXTRA_ARGS: >-
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+        run: |
+          chmod +x linux/native/build.sh
+          ./linux/native/build.sh
+
+      - name: Smoke-test the binary
+        run: QT_QPA_PLATFORM=offscreen linux/native/build/Release/bin/Segmenter --scan /nonexistent | tail -1
+
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "${VERSION}" = "${GITHUB_REF_NAME}" ] && VERSION="1.0.0"
+          chmod +x linux/native/package.sh
+          ./linux/native/package.sh --only rpm --version "${VERSION}"
+
+      - name: Smoke-test the package
+        run: rpm -qlp linux/native/dist/*.rpm | grep -q '/usr/bin/Segmenter'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-rpm-arm64
           path: linux/native/dist/*.rpm
           if-no-files-found: error
 
@@ -529,7 +654,7 @@ jobs:
 
   release:
     name: Publish release
-    needs: [linux-deb, linux-rpm, linux-appimage, windows, flatpak, macos]
+    needs: [linux-deb, linux-deb-arm64, linux-rpm, linux-rpm-arm64, linux-appimage, windows, flatpak, macos]
     runs-on: ubuntu-latest
     # Manual runs build and upload artifacts but deliberately stop short of
     # publishing, so the workflow can be exercised without cutting a release.
@@ -555,8 +680,10 @@ jobs:
 
             | Platform | File |
             |---|---|
-            | Debian / Ubuntu / Mint | `segmenter_*_amd64.deb` — `sudo apt install ./segmenter_*.deb` |
-            | Fedora / RHEL / openSUSE | `segmenter-*.x86_64.rpm` — `sudo dnf install ./segmenter-*.rpm` |
+            | Debian / Ubuntu / Mint (x86_64) | `segmenter_*_amd64.deb` — `sudo apt install ./segmenter_*.deb` |
+            | Debian / Ubuntu / Mint (arm64) | `segmenter_*_arm64.deb` — `sudo apt install ./segmenter_*.deb` |
+            | Fedora / RHEL / openSUSE (x86_64) | `segmenter-*.x86_64.rpm` — `sudo dnf install ./segmenter-*.rpm` |
+            | Fedora / RHEL / openSUSE (aarch64) | `segmenter-*.aarch64.rpm` — `sudo dnf install ./segmenter-*.rpm` |
             | Arch / Manjaro | `PKGBUILD` — drop it in a directory and run `makepkg -si` |
             | Sandboxed, any distro | `Segmenter-*-x86_64.flatpak` — `flatpak install ./Segmenter-*.flatpak` |
             | Any Linux (no install) | `Segmenter-*-x86_64.AppImage` — `chmod +x` and run |

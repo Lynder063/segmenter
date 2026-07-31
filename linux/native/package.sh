@@ -51,6 +51,18 @@ esac
 
 DIST_DIR="${SCRIPT_DIR}/dist"
 
+# Architecture-aware package naming/metadata, so an arm64 build doesn't ship
+# a .deb/.rpm/AppImage that claims to be amd64/x86_64. dpkg's own arch names
+# (amd64/arm64) differ from uname -m (x86_64/aarch64) and from rpm's own
+# convention (which matches uname -m directly) — hence three separate
+# variables instead of one.
+HOST_MACHINE="$(uname -m)"
+case "${HOST_MACHINE}" in
+    x86_64)  DEB_ARCH="amd64"; RPM_ARCH="x86_64";  APPIMAGE_ARCH="x86_64"  ;;
+    aarch64) DEB_ARCH="arm64"; RPM_ARCH="aarch64";  APPIMAGE_ARCH="aarch64" ;;
+    *) echo "Unsupported architecture: ${HOST_MACHINE}" >&2; exit 1 ;;
+esac
+
 if [[ -n "${STAGED_DIR_ARG}" ]]; then
     STAGE_DIR="${STAGED_DIR_ARG}"
     if [[ ! -x "${STAGE_DIR}/usr/bin/Segmenter" ]]; then
@@ -98,7 +110,7 @@ Package: segmenter
 Version: ${VERSION}
 Section: video
 Priority: optional
-Architecture: amd64
+Architecture: ${DEB_ARCH}
 Depends: libqt6widgets6 (>= 6.5), libqt6network6 (>= 6.5), libqt6concurrent6 (>= 6.5), libvlc5, libc6
 Recommends: ffmpeg, libsecret-1-0, tesseract-ocr, tesseract-ocr-eng, vlc-plugin-base, qadwaitadecorations-qt6
 Maintainer: Kryštof Malinda <lynder063@users.noreply.github.com>
@@ -111,8 +123,8 @@ Description: Visual timestamp annotation and automatic segment detection
 CONTROL
 
 dpkg-deb --build --root-owner-group "${DEB_ROOT}" \
-    "${DIST_DIR}/segmenter_${VERSION}_amd64.deb" >/dev/null
-echo "  -> ${DIST_DIR}/segmenter_${VERSION}_amd64.deb"
+    "${DIST_DIR}/segmenter_${VERSION}_${DEB_ARCH}.deb" >/dev/null
+echo "  -> ${DIST_DIR}/segmenter_${VERSION}_${DEB_ARCH}.deb"
 fi # deb
 
 if [[ -z "${ONLY}" || "${ONLY}" == "rpm" ]]; then
@@ -145,7 +157,7 @@ License:        MIT
 URL:            https://github.com/Lynder063/segmenter
 Source0:        segmenter-${VERSION}.tar.gz
 Source1:        LICENSE
-BuildArch:      x86_64
+BuildArch:      ${RPM_ARCH}
 
 Requires:       qt6-qtbase >= 6.5, qt6-qtbase-gui >= 6.5, vlc-libs
 Recommends:     ffmpeg-free, libsecret, tesseract, tesseract-langpack-eng, qt6-qtwayland-adwaita-decoration
@@ -216,13 +228,21 @@ fetch_tool() {
 BASE="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous"
 QT_BASE="https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous"
 
-if fetch_tool linuxdeploy "${BASE}/linuxdeploy-x86_64.AppImage" \
-   && fetch_tool linuxdeploy-plugin-qt "${QT_BASE}/linuxdeploy-plugin-qt-x86_64.AppImage"; then
+# linuxdeploy publishes continuous builds per-arch (x86_64/aarch64/armhf/i386)
+# under this exact naming, and always runs natively (no cross-arch use here),
+# so APPIMAGE_ARCH — derived from uname -m above — picks the right asset.
+# Not actually exercised on aarch64 by any CI job yet: aqt has no Linux arm64
+# desktop Qt kit at all (only linux_gcc_64), so linux-build/linux-appimage's
+# install-qt-action approach can't be mirrored on arm64 without switching to
+# a distro-packaged Qt, unlike linux-deb/linux-rpm which already get Qt from
+# their containers' own package managers.
+if fetch_tool linuxdeploy "${BASE}/linuxdeploy-${APPIMAGE_ARCH}.AppImage" \
+   && fetch_tool linuxdeploy-plugin-qt "${QT_BASE}/linuxdeploy-plugin-qt-${APPIMAGE_ARCH}.AppImage"; then
 
     # Containers usually lack FUSE, which these tools need to mount themselves.
     export APPIMAGE_EXTRACT_AND_RUN=1
     export QMAKE="${QMAKE:-$(command -v qmake6 || command -v qmake || true)}"
-    export OUTPUT="${DIST_DIR}/Segmenter-${VERSION}-x86_64.AppImage"
+    export OUTPUT="${DIST_DIR}/Segmenter-${VERSION}-${APPIMAGE_ARCH}.AppImage"
 
     # linuxdeploy-plugin-qt bundles only the xcb platform plugin by default.
     # That is enough for a desktop session but leaves `--scan` broken, because
